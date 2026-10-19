@@ -62,7 +62,7 @@ app.include_router(alerts.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(app_settings.router, prefix="/api")
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
         "project": "AirPurify AI",

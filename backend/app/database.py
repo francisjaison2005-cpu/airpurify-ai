@@ -52,12 +52,18 @@ def init_db() -> Any:
 
     # Attempt real MongoDB / Atlas connection first
     try:
-        real_client = MongoClient(
-            target_uri,
-            serverSelectionTimeoutMS=10000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000
-        )
+        client_kwargs = {
+            "serverSelectionTimeoutMS": 10000,
+            "connectTimeoutMS": 10000,
+            "socketTimeoutMS": 10000,
+        }
+        try:
+            import certifi
+            client_kwargs["tlsCAFile"] = certifi.where()
+        except ImportError:
+            pass
+
+        real_client = MongoClient(target_uri, **client_kwargs)
         # Force a command to test connection
         real_client.admin.command('ping')
         _client = real_client
