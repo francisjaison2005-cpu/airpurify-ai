@@ -31,19 +31,19 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HardwareSerial.h>
 #include "DHT.h"
 
 // -----------------------------------------------------------------------------
-// USER CONFIGURATION (EDIT THESE VALUES)
+// USER CONFIGURATION
 // -----------------------------------------------------------------------------
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Airpurify";
+const char* WIFI_PASSWORD = "airpurify@ai";
 
-// IP Address or domain of your FastAPI Backend server (port 8000 by default)
-// Example: "http://192.168.1.100:8000/api/readings"
-const char* SERVER_ENDPOINT = "http://192.168.1.100:8000/api/readings";
+// AirPurify AI FastAPI Backend Server Endpoint on Render (HTTPS)
+const char* SERVER_ENDPOINT = "https://airpurify-ai-backend.onrender.com/api/readings";
 
 // Station & Device Metadata (Matches registered location in AirPurify AI)
 // Available seeded stations: "main-gate", "library-quad", "academic-block-3", "science-complex"
@@ -320,8 +320,15 @@ bool sendReadingToDatabase(float pm1_0, float pm2_5, float pm10, float temp, flo
     return false;
   }
 
+  // Use WiFiClientSecure with setInsecure() for HTTPS connection to Render cloud
+  WiFiClientSecure client;
+  client.setInsecure(); // Skip TLS certificate verification on embedded node
+
   HTTPClient http;
-  http.begin(SERVER_ENDPOINT);
+  if (!http.begin(client, SERVER_ENDPOINT)) {
+    Serial.println("[HTTP] Unable to connect to cloud endpoint.");
+    return false;
+  }
   http.addHeader("Content-Type", "application/json");
 
   // Construct JSON payload matching backend ReadingCreateSchema
