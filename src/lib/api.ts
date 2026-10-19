@@ -1,8 +1,18 @@
-export const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) ||
-  (typeof window !== "undefined" && window.location.hostname === "localhost"
+function resolveApiBase(): string {
+  const envBase = typeof import.meta !== "undefined" ? (import.meta as any).env?.VITE_API_BASE : undefined;
+  if (envBase && typeof envBase === "string" && envBase.trim().length > 0) {
+    let clean = envBase.trim().replace(/\/+$/, "");
+    if (!clean.endsWith("/api")) {
+      clean = `${clean}/api`;
+    }
+    return clean;
+  }
+  return typeof window !== "undefined" && window.location.hostname === "localhost"
     ? "http://127.0.0.1:8000/api"
-    : "/api");
+    : "/api";
+}
+
+export const API_BASE = resolveApiBase();
 
 export interface SystemHealth {
   status: string;
