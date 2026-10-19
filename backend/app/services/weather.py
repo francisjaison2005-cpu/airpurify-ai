@@ -1,4 +1,4 @@
-﻿"""
+"""
 Weather and reverse geocoding services for AirPurify AI.
 Integrates Open-Meteo for live ambient outdoor temperature and relative humidity.
 Integrates OpenStreetMap Nominatim for reverse geocoding.
@@ -50,7 +50,7 @@ def get_ambient_weather(latitude: float, longitude: float) -> Dict[str, Any]:
     }
 
     try:
-        with httpx.Client(timeout=6.0) as client:
+        with httpx.Client(timeout=12.0) as client:
             resp = client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
@@ -86,7 +86,7 @@ def get_ambient_weather(latitude: float, longitude: float) -> Dict[str, Any]:
             "surface_pressure": float(pressure) if pressure is not None else None,
             "observation_timestamp": obs_time_iso,
             "units": {
-                "temperature": "Â°C",
+                "temperature": "°C",
                 "humidity": "%",
                 "wind_speed": "km/h",
                 "pressure": "hPa",
@@ -162,7 +162,7 @@ def reverse_geocode(latitude: float, longitude: float) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Error reverse geocoding ({latitude}, {longitude}): {e}")
         return {
-            "display_name": f"Location at {latitude:.4f}Â° N, {longitude:.4f}Â° E",
+            "display_name": f"Location at {abs(latitude):.4f}° {'N' if latitude >= 0 else 'S'}, {abs(longitude):.4f}° {'E' if longitude >= 0 else 'W'}",
             "city": None,
             "state": None,
             "country": None,

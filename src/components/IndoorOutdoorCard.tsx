@@ -16,6 +16,8 @@ import {
   ShieldAlert,
   ArrowRight,
   Compass,
+  BrainCircuit,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,7 @@ import {
   type ReadingItem,
   type AmbientWeatherResult,
   type IndoorOutdoorHeuristicResult,
+  type IndoorOutdoorResult,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -54,12 +57,41 @@ export function IndoorOutdoorCard({
   onOpenClassifierModal,
 }: IndoorOutdoorCardProps) {
   const [heuristicResult, setHeuristicResult] = useState<IndoorOutdoorHeuristicResult | null>(null);
+  const [mlResult, setMlResult] = useState<IndoorOutdoorResult | null>(null);
   const [evaluating, setEvaluating] = useState<boolean>(false);
   const [evalError, setEvalError] = useState<string | null>(null);
 
   const evaluateHeuristic = useCallback(async () => {
     setEvaluating(true);
     setEvalError(null);
+
+    // 1. Evaluate Supervised ML Model on live IoT sensor readings
+    if (
+      reading?.temperature != null &&
+      reading?.humidity != null &&
+      reading?.pm2_5 != null &&
+      reading?.pm10 != null
+    ) {
+      try {
+        const ml = await api.predictIndoorOutdoor({
+          temperature: reading.temperature,
+          humidity: reading.humidity,
+          pm1_0: reading.pm1_0 ?? reading.pm2_5 * 0.45,
+          pm2_5: reading.pm2_5,
+          pm10: reading.pm10,
+          temporal_hour: new Date(reading.timestamp || Date.now()).getHours(),
+          is_manual_entry: reading.data_source !== "sensor",
+          location_id: reading.location_id,
+          location_name: placeName ?? reading.location_name,
+          latitude: latitude ?? null,
+          longitude: longitude ?? null,
+          data_source: reading.data_source,
+        });
+        setMlResult(ml);
+      } catch (mlErr) {
+        console.warn("Live ML classifier evaluation failed:", mlErr);
+      }
+    }
 
     try {
       const payload = {
@@ -333,7 +365,64 @@ export function IndoorOutdoorCard({
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Prominent Estimation Banner */}
+        {/* Pipeline 1: Supervised ML Model (Trained Random Forest Classifier) */}
+        {mlResult && mlResult.model_status === "trained" && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 transition-all">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-xl bg-card border border-border shadow-xs text-primary">
+                  <BrainCircuit className="size-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase ${
+                        mlResult.predicted_class === "Indoor"
+                          ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                          : "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                      }`}
+                    >
+                      {mlResult.predicted_class === "Indoor" ? (
+                        <Building className="size-3" />
+                      ) : (
+                        <TreePine className="size-3" />
+                      )}
+                      Pipeline 1 · ML Model: {mlResult.predicted_class}
+                    </span>
+                    {mlResult.confidence_score != null && (
+                      <span className="text-[11px] font-mono text-muted-foreground">
+                        ({(mlResult.confidence_score * 100).toFixed(1)}% confidence)
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Supervised Random Forest evaluated on live IoT sensor telemetry (PM10: {reading?.pm10}, PM2.5: {reading?.pm2_5}, Temp: {reading?.temperature}°C, RH: {reading?.humidity}%)
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-muted-foreground sm:text-right shrink-0">
+                <p>Model Architecture: <span className="font-mono text-foreground font-semibold">Random Forest v1.0</span></p>
+                <p>Training Grounding: <span className="text-foreground">Figshare South Asia + Chennai</span></p>
+              </div>
+            </div>
+
+            {mlResult.feature_importance && (
+              <div className="mt-3 pt-2.5 border-t border-border/40 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                <span className="font-semibold text-foreground flex items-center gap-1">
+                  <Sparkles className="size-3 text-primary" /> Feature Contributions:
+                </span>
+                {Object.entries(mlResult.feature_importance).map(([k, v]) => (
+                  <span key={k} className="rounded bg-muted/60 px-1.5 py-0.5 font-mono">
+                    {k}: {(v * 100).toFixed(0)}%
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Pipeline 2: Prominent Estimation Banner */}
         <div className={`rounded-xl border ${estimateBadgeConfig.accentBorder} ${estimateBadgeConfig.accentBg} p-4 sm:p-5 transition-all`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3.5">
@@ -346,7 +435,7 @@ export function IndoorOutdoorCard({
                     {estimateBadgeConfig.label}
                   </span>
                   <span className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
-                    Non-ML Heuristic
+                    Pipeline 2 · Heuristic
                   </span>
                 </div>
                 <h4 className="mt-1 text-sm font-semibold text-foreground">
