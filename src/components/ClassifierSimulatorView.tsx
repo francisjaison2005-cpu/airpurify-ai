@@ -300,7 +300,7 @@ export function ClassifierSimulatorView({
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-bold text-foreground">
-                    Duplicate Location / Demo Sensor
+                    Location /Sensor
                   </span>
 
                   {/* Clear visual indicator showing which mode is active */}
@@ -312,7 +312,7 @@ export function ClassifierSimulatorView({
                         : "bg-blue-600 text-white hover:bg-blue-600"
                     }`}
                   >
-                    {isOutdoor ? "ON — Outdoor Demo" : "OFF — Indoor Demo"}
+                    {isOutdoor ? "ON " : "OFF "}
                   </Badge>
 
                   {/* 10-second automatic refresh indicator */}
@@ -328,8 +328,8 @@ export function ClassifierSimulatorView({
 
                 <p className="text-xs text-muted-foreground">
                   {isOutdoor
-                    ? "Active: ON — Outdoor Demo · Local temperature generated between 29°C and 36°C (RH 45–85%). Forced consensus classification: OUTDOOR."
-                    : "Active: OFF — Indoor Demo · Local temperature generated between 25°C and 28°C (RH 40–65%). Forced consensus classification: INDOOR."}
+                    ? "Active: ON"
+                    : "Active: OFF"}
                 </p>
 
                 {/* Explicit statement required by prompt: must not claim to physically move sensor or duplicate geographic location */}
@@ -355,12 +355,12 @@ export function ClassifierSimulatorView({
                 {isOutdoor ? (
                   <>
                     <Building className="size-4" />
-                    Switch to: OFF — Indoor Demo
+                    Switch to: OFF
                   </>
                 ) : (
                   <>
                     <TreePine className="size-4" />
-                    Switch to: ON — Outdoor Demo
+                    Switch to: ON
                   </>
                 )}
               </Button>
