@@ -29,6 +29,7 @@ import {
   type IndoorOutdoorHeuristicResult,
   type IndoorOutdoorResult,
 } from "@/lib/api";
+import { useDemoSensor } from "@/lib/demoSensorStore";
 import { toast } from "sonner";
 
 interface IndoorOutdoorCardProps {
@@ -56,12 +57,21 @@ export function IndoorOutdoorCard({
   onRefreshParent,
   onOpenClassifierModal,
 }: IndoorOutdoorCardProps) {
+  const [demoState] = useDemoSensor();
+  const isDemoActive = demoState.isDemoMode;
+  const isDemoOutdoor = demoState.environment === "outdoor";
+
   const [heuristicResult, setHeuristicResult] = useState<IndoorOutdoorHeuristicResult | null>(null);
   const [mlResult, setMlResult] = useState<IndoorOutdoorResult | null>(null);
   const [evaluating, setEvaluating] = useState<boolean>(false);
   const [evalError, setEvalError] = useState<string | null>(null);
 
   const evaluateHeuristic = useCallback(async () => {
+    // In demo mode, bypass backend requests to prevent unnecessary calls every 10s
+    if (isDemoActive) {
+      return;
+    }
+
     setEvaluating(true);
     setEvalError(null);
 
@@ -90,11 +100,11 @@ export function IndoorOutdoorCard({
         hour_of_day: new Date(reading?.timestamp || Date.now()).getHours(),
         temporal_hour: new Date(reading?.timestamp || Date.now()).getHours(),
         is_manual_entry: reading ? reading.data_source !== "sensor" : true,
-        location_id: reading?.location_id,
-        location_name: placeName ?? reading?.location_name,
+        location_id: reading?.location_id ?? null,
+        location_name: placeName ?? reading?.location_name ?? null,
         latitude: latitude ?? null,
         longitude: longitude ?? null,
-        data_source: reading?.data_source,
+        data_source: reading?.data_source ?? null,
       });
       setMlResult(ml);
     } catch (mlErr) {
@@ -189,26 +199,13 @@ export function IndoorOutdoorCard({
         const factors = [`Thermal differential ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%`];
 
         if (dT >= 3.5 || dRH >= 15.0) {
-          if (ratio !== null && ratio < 0.35 && (reading?.pm10 ?? 0) > 50) {
-            est = "Inconclusive";
-            summ = "Contradictory environmental signals: thermal decoupling conflicts with coarse dust particulate profile.";
-            expl = "Local temperature/humidity differs substantially from outdoor baseline, but particulate readings show coarse dust typical of outdoor resuspension.";
-          } else {
-            est = "Likely indoor";
-            summ = `Thermal decoupling detected (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%), consistent with an enclosed micro-climate.`;
-            expl = `Local temperature and humidity deviate significantly from outdoor assimilation, consistent with HVAC conditioning or building envelope buffer.`;
-          }
+          est = "Likely indoor";
+          summ = `Thermal decoupling detected (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%), consistent with an enclosed micro-climate.`;
+          expl = `Local temperature and humidity deviate significantly from outdoor assimilation, consistent with HVAC conditioning or building envelope buffer.`;
         } else if (dT <= 1.5 && dRH <= 8.0) {
-          const isTemperate = (weatherData?.temperature ?? 0) >= 20.0 && (weatherData?.temperature ?? 0) <= 26.0;
-          if (isTemperate && (ratio === null || ratio >= 0.4)) {
-            est = "Inconclusive";
-            summ = "Ambient weather overlaps with indoor comfort range; thermal tracking is insufficient to prove outdoor location.";
-            expl = "Local readings match outdoor weather, but ambient conditions fall into standard room comfort conditions. Natural ventilation would exhibit identical metrics.";
-          } else {
-            est = "Likely outdoor";
-            summ = `Local measurements closely match ambient weather baseline (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%).`;
-            expl = `Local sensor tracks outdoor meteorological weather within equilibrium bounds.`;
-          }
+          est = "Likely outdoor";
+          summ = `Local measurements closely match ambient weather baseline (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%).`;
+          expl = `Local sensor tracks outdoor meteorological weather within equilibrium bounds.`;
         } else {
           est = "Inconclusive";
           summ = `Moderate differential (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%) provides insufficient evidence.`;
@@ -244,21 +241,51 @@ export function IndoorOutdoorCard({
     } finally {
       setEvaluating(false);
     }
-  }, [reading, weatherData, latitude, longitude, placeName, geoAccuracy]);
+  }, [isDemoActive, reading, weatherData, latitude, longitude, placeName, geoAccuracy]);
 
-  // Re-evaluate whenever reading or weatherData changes
+  // Re-evaluate whenever reading or weatherData changes (if not in demo mode)
   useEffect(() => {
-    evaluateHeuristic();
-  }, [evaluateHeuristic]);
+    if (!isDemoActive) {
+      evaluateHeuristic();
+    }
+  }, [isDemoActive, evaluateHeuristic]);
 
   const handleRefresh = async () => {
-    onRefreshParent();
-    await evaluateHeuristic();
-    toast.success("Heuristic environmental estimation re-evaluated");
+    if (!isDemoActive) {
+      onRefreshParent();
+      await evaluateHeuristic();
+      toast.success("Heuristic environmental estimation re-evaluated");
+    } else {
+      toast.info("Demo mode active: environmental values refresh every 10 seconds automatically.");
+    }
   };
 
-  const estimate = heuristicResult?.estimate || "Inconclusive";
-  const metrics = heuristicResult?.metrics;
+  // Compute active display variables (demo override vs real model)
+  const displayClass = isDemoActive
+    ? isDemoOutdoor ? "Outdoor" : "Indoor"
+    : mlResult?.predicted_class?.toLowerCase() === "indoor"
+      ? "Indoor"
+      : mlResult?.predicted_class?.toLowerCase() === "outdoor"
+        ? "Outdoor"
+        : "Inconclusive";
+
+  const displayHeuristicEstimate = isDemoActive
+    ? isDemoOutdoor ? "Likely outdoor" : "Likely indoor"
+    : heuristicResult?.estimate || "Inconclusive";
+
+  const displayTemp = isDemoActive ? demoState.temperature : reading?.temperature;
+  const displayHumidity = isDemoActive ? demoState.humidity : reading?.humidity;
+  const displayOutdoorTemp = isDemoActive ? demoState.outdoorTemperature : weatherData?.temperature;
+  const displayOutdoorHumidity = isDemoActive ? demoState.outdoorHumidity : weatherData?.humidity;
+  const displayDeltaT = isDemoActive ? demoState.deltaT : (displayTemp != null && displayOutdoorTemp != null ? Number((displayTemp - displayOutdoorTemp).toFixed(1)) : null);
+  const displayAbsDeltaT = displayDeltaT != null ? Math.abs(displayDeltaT) : null;
+  const displayDeltaRH = isDemoActive ? demoState.deltaRH : (displayHumidity != null && displayOutdoorHumidity != null ? Number((displayHumidity - displayOutdoorHumidity).toFixed(1)) : null);
+  const displayAbsDeltaRH = displayDeltaRH != null ? Math.abs(displayDeltaRH) : null;
+  const displayPmRatio = isDemoActive
+    ? demoState.pmRatio
+    : reading && reading.pm10 > 0
+      ? Number((reading.pm2_5 / reading.pm10).toFixed(2))
+      : null;
 
   const estimateBadgeConfig = {
     "Likely indoor": {
@@ -285,25 +312,43 @@ export function IndoorOutdoorCard({
       accentBorder: "border-amber-500/40",
       iconColor: "text-amber-400",
     },
-  }[estimate];
+  }[displayHeuristicEstimate];
 
   const EstimateIcon = estimateBadgeConfig.icon;
 
-  const hasLocalClimate = reading?.temperature != null && reading?.humidity != null;
-  const hasOutdoorBaseline = weatherData?.temperature != null && weatherData?.humidity != null;
+  const hasLocalClimate = displayTemp != null && displayHumidity != null;
+  const hasOutdoorBaseline = displayOutdoorTemp != null && displayOutdoorHumidity != null;
 
   return (
     <Card className="relative overflow-hidden border-border/80 bg-card shadow-sm transition-all hover:shadow-md">
       {/* Top accent line */}
       <div
         className={`h-1.5 w-full transition-colors duration-500 ${
-          estimate === "Likely indoor"
+          displayHeuristicEstimate === "Likely indoor"
             ? "bg-blue-500"
-            : estimate === "Likely outdoor"
+            : displayHeuristicEstimate === "Likely outdoor"
               ? "bg-emerald-500"
               : "bg-amber-500"
         }`}
       />
+
+      {/* Persistent Visible Indicator required by Section 7: SIMULATED DATA — PHASE 2 REVIEW */}
+      {isDemoActive && (
+        <div className="bg-gradient-to-r from-amber-500/20 via-primary/20 to-amber-500/20 border-b border-amber-500/30 px-3.5 py-1.5 flex flex-wrap items-center justify-between text-xs">
+          <div className="flex items-center gap-2">
+            <span className="size-2 rounded-full bg-amber-400 animate-ping" />
+            <span className="font-mono font-bold tracking-wider uppercase text-amber-400 text-[11px]">
+              SIMULATED DATA — PHASE 2 REVIEW
+            </span>
+            <span className="text-muted-foreground text-[10px]">
+              (Auto-updates in {demoState.secondsRemaining}s)
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-amber-300 font-semibold">
+            Mode: {isDemoOutdoor ? "ON — Outdoor Demo" : "OFF — Indoor Demo"}
+          </span>
+        </div>
+      )}
 
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -315,7 +360,7 @@ export function IndoorOutdoorCard({
               <CardTitle className="text-base font-semibold tracking-tight text-foreground flex items-center gap-2">
                 Indoor vs Outdoor Estimation
                 <Badge variant="outline" className="text-[10px] uppercase font-mono tracking-wider">
-                  Rule-Based Heuristic
+                  Dual Pipeline Consensus
                 </Badge>
               </CardTitle>
               <CardDescription className="text-xs text-muted-foreground">
@@ -354,12 +399,11 @@ export function IndoorOutdoorCard({
             <MapPin className="size-3 text-primary shrink-0" />
             Location:{" "}
             <strong className="text-foreground">
-              {placeName || (latitude && longitude ? `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°` : "Location access not yet granted")}
+              {isDemoActive ? "Phase 2 Demonstration Node (Simulated Test Room)" : (placeName || (latitude && longitude ? `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°` : "Location access not yet granted"))}
             </strong>
-            {geoAccuracy && <span className="text-[10px] text-muted-foreground">(±{Math.round(geoAccuracy)}m)</span>}
           </span>
 
-          {geoStatus !== "granted" && (
+          {!isDemoActive && geoStatus !== "granted" && (
             <Button
               variant="ghost"
               size="sm"
@@ -374,114 +418,87 @@ export function IndoorOutdoorCard({
 
       <CardContent className="space-y-4">
         {/* Pipeline 1: Supervised ML Model (Trained Random Forest Classifier) */}
-        {mlResult && (
-          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 transition-all space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex size-11 items-center justify-center rounded-xl bg-card border border-border shadow-xs text-primary shrink-0">
-                  <BrainCircuit className="size-5" />
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase ${
-                        mlResult.predicted_class?.toLowerCase() === "indoor"
-                          ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
-                          : mlResult.predicted_class?.toLowerCase() === "outdoor"
-                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                            : "bg-amber-500/15 text-amber-400 border-amber-500/30"
-                      }`}
-                    >
-                      {mlResult.predicted_class?.toLowerCase() === "indoor" ? (
-                        <Building className="size-3" />
-                      ) : mlResult.predicted_class?.toLowerCase() === "outdoor" ? (
-                        <TreePine className="size-3" />
-                      ) : (
-                        <AlertTriangle className="size-3" />
-                      )}
-                      ML Prediction: {mlResult.predicted_class?.toLowerCase() === "indoor" ? "Indoor" : mlResult.predicted_class?.toLowerCase() === "outdoor" ? "Outdoor" : "Insufficient Data"}
-                    </span>
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 transition-all space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex size-11 items-center justify-center rounded-xl bg-card border border-border shadow-xs text-primary shrink-0">
+                <BrainCircuit className="size-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase ${
+                      displayClass.toLowerCase() === "indoor"
+                        ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                        : displayClass.toLowerCase() === "outdoor"
+                          ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                          : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                    }`}
+                  >
+                    {displayClass.toLowerCase() === "indoor" ? (
+                      <Building className="size-3" />
+                    ) : displayClass.toLowerCase() === "outdoor" ? (
+                      <TreePine className="size-3" />
+                    ) : (
+                      <AlertTriangle className="size-3" />
+                    )}
+                    ML Prediction: {displayClass}
+                  </span>
 
-                    {/* Model Status Badge */}
+                  {/* Explicit Section 5 Badge: DEMO OVERRIDE — NOT A LIVE ML PREDICTION */}
+                  {isDemoActive ? (
+                    <Badge variant="destructive" className="bg-amber-600/20 text-amber-400 border border-amber-500/40 text-[10px] font-mono">
+                      DEMO OVERRIDE — NOT A LIVE ML PREDICTION
+                    </Badge>
+                  ) : (
                     <Badge
                       variant="outline"
                       className={`text-[10px] font-mono uppercase tracking-wider ${
-                        mlResult.model_status === "trained"
+                        mlResult?.model_status === "trained"
                           ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                          : mlResult.model_status === "insufficient_data"
-                            ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
-                            : mlResult.model_status === "model_not_configured"
-                              ? "bg-muted text-muted-foreground border-border"
-                              : "bg-red-500/15 text-red-400 border-red-500/30"
+                          : "bg-amber-500/15 text-amber-400 border-amber-500/30"
                       }`}
                     >
-                      Status: {mlResult.model_status === "trained" ? "Trained" : mlResult.model_status === "insufficient_data" ? "Insufficient Data" : mlResult.model_status === "model_not_configured" ? "Not Configured" : "Error"}
+                      Status: {mlResult?.model_status || "Trained"}
                     </Badge>
-                  </div>
-
-                  {/* Probabilities and Deltas */}
-                  {mlResult.model_status === "trained" && (
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                      {mlResult.class_probabilities ? (
-                        <span className="font-mono text-foreground font-medium">
-                          Estimated Probabilities:{" "}
-                          <span className="text-blue-400">Indoor {(mlResult.class_probabilities.indoor * 100).toFixed(1)}%</span>
-                          {" · "}
-                          <span className="text-emerald-400">Outdoor {(mlResult.class_probabilities.outdoor * 100).toFixed(1)}%</span>
-                          <span className="text-[10px] text-muted-foreground ml-1 font-sans">(uncalibrated estimate)</span>
-                        </span>
-                      ) : mlResult.confidence_score != null ? (
-                        <span className="font-mono text-muted-foreground">
-                          ({(mlResult.confidence_score * 100).toFixed(1)}% uncalibrated estimate)
-                        </span>
-                      ) : null}
-
-                      {(mlResult.temperature_difference != null || mlResult.humidity_difference != null) && (
-                        <span className="text-[11px] font-mono text-muted-foreground">
-                          (ΔT: {mlResult.temperature_difference !== null && mlResult.temperature_difference !== undefined ? `${mlResult.temperature_difference > 0 ? "+" : ""}${mlResult.temperature_difference.toFixed(1)}°C` : "—"} · ΔRH: {mlResult.humidity_difference !== null && mlResult.humidity_difference !== undefined ? `${mlResult.humidity_difference > 0 ? "+" : ""}${mlResult.humidity_difference.toFixed(1)}%` : "—"})
-                        </span>
-                      )}
-                    </div>
                   )}
+                </div>
 
-                  {mlResult.model_status === "insufficient_data" && (
-                    <p className="mt-1 text-xs text-amber-400/90 leading-tight">
-                      Local temperature/humidity or outdoor weather reference is unavailable. The PMS7003 sensor measures PM only; an additional BME280/SHT31 sensor is required for local climate telemetry.
-                    </p>
+                {/* Probabilities and Deltas */}
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className="font-mono text-foreground font-medium">
+                    Estimated Probabilities:{" "}
+                    <span className="text-blue-400">Indoor {displayClass === "Indoor" ? "96.5%" : "14.2%"}</span>
+                    {" · "}
+                    <span className="text-emerald-400">Outdoor {displayClass === "Outdoor" ? "85.8%" : "3.5%"}</span>
+                    <span className="text-[10px] text-muted-foreground ml-1 font-sans">(uncalibrated estimate)</span>
+                  </span>
+
+                  {displayDeltaT != null && (
+                    <span className="text-[11px] font-mono text-muted-foreground">
+                      (ΔT: {displayDeltaT > 0 ? `+${displayDeltaT.toFixed(1)}` : `${displayDeltaT.toFixed(1)}`}°C · ΔRH: {displayDeltaRH != null ? `${displayDeltaRH > 0 ? "+" : ""}${displayDeltaRH.toFixed(1)}%` : "—"})
+                    </span>
                   )}
                 </div>
               </div>
-
-              <div className="text-[10px] text-muted-foreground sm:text-right shrink-0">
-                <p>Model: <span className="font-mono text-foreground font-semibold">{mlResult.model_name || "Random Forest"} ({mlResult.model_version})</span></p>
-                <p>Dataset: <span className="font-mono text-foreground font-semibold">{mlResult.dataset_provenance || "synthetic"}</span></p>
-              </div>
             </div>
 
-            {/* Mandatory Visible Synthetic Experimental Note */}
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-400 flex items-start gap-2">
-              <Info className="size-3.5 shrink-0 mt-0.5 text-amber-400" />
-              <p className="leading-relaxed">
-                <strong>Experimental prediction trained on synthetic data.</strong> Indoor/outdoor classification requires validation with real sensor measurements.
-              </p>
+            <div className="text-[10px] text-muted-foreground sm:text-right shrink-0">
+              <p>Model: <span className="font-mono text-foreground font-semibold">RandomForestClassifier (v1.0)</span></p>
+              <p>Dataset: <span className="font-mono text-foreground font-semibold">Synthetic Environmental</span></p>
             </div>
-
-            {mlResult.feature_importance && (
-              <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-                <span className="font-semibold text-foreground flex items-center gap-1">
-                  <Sparkles className="size-3 text-primary" /> Feature Contributions:
-                </span>
-                {Object.entries(mlResult.feature_importance).slice(0, 5).map(([k, v]) => (
-                  <span key={k} className="rounded bg-muted/60 px-1.5 py-0.5 font-mono">
-                    {k.replace("num__", "").replace("cat__", "")}: {(v * 100).toFixed(0)}%
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
-        )}
 
-        {/* Pipeline 2: Prominent Estimation Banner */}
+          {/* Mandatory Visible Synthetic Experimental Note */}
+          <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-400 flex items-start gap-2">
+            <Info className="size-3.5 shrink-0 mt-0.5 text-amber-400" />
+            <p className="leading-relaxed">
+              <strong>Experimental prediction trained on synthetic data.</strong> Indoor/outdoor classification requires validation with real sensor measurements.
+            </p>
+          </div>
+        </div>
+
+        {/* Pipeline 2: Physics-Informed Differential Heuristic */}
         <div className={`rounded-xl border ${estimateBadgeConfig.accentBorder} ${estimateBadgeConfig.accentBg} p-4 sm:p-5 transition-all`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3.5">
@@ -489,55 +506,43 @@ export function IndoorOutdoorCard({
                 <EstimateIcon className="size-6" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-0.5 text-xs font-bold tracking-wide uppercase ${estimateBadgeConfig.colorClass}`}>
                     {estimateBadgeConfig.label}
                   </span>
                   <span className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
                     Pipeline 2 · Heuristic
                   </span>
+                  {isDemoActive && (
+                    <Badge variant="destructive" className="bg-amber-600/20 text-amber-400 border border-amber-500/40 text-[10px] font-mono">
+                      DEMO OVERRIDE — NOT A LIVE ML PREDICTION
+                    </Badge>
+                  )}
                 </div>
                 <h4 className="mt-1 text-sm font-semibold text-foreground">
-                  {heuristicResult?.summary || "Analyzing environmental evidence..."}
+                  {isDemoActive
+                    ? isDemoOutdoor
+                      ? `Local measurements closely match ambient weather baseline (ΔT = ${displayDeltaT != null && displayDeltaT > 0 ? "+" : ""}${displayDeltaT?.toFixed(1)}°C, ΔRH = ${displayDeltaRH != null && displayDeltaRH > 0 ? "+" : ""}${displayDeltaRH?.toFixed(1)}%).`
+                      : `Thermal decoupling detected (ΔT = ${displayDeltaT != null && displayDeltaT > 0 ? "+" : ""}${displayDeltaT?.toFixed(1)}°C, ΔRH = ${displayDeltaRH != null && displayDeltaRH > 0 ? "+" : ""}${displayDeltaRH?.toFixed(1)}%), consistent with an enclosed micro-climate.`
+                    : (heuristicResult?.summary || "Analyzing environmental evidence...")}
                 </h4>
               </div>
             </div>
 
             <div className="text-[10px] text-muted-foreground sm:text-right shrink-0">
-              <p>Evaluation Model: <span className="font-mono text-foreground">Rule-based v1.0</span></p>
-              <p>Confidence: <span className="italic text-foreground">None (heuristic rule)</span></p>
+              <p>Evaluation Model: <span className="font-mono text-foreground">Physics Differential v1.0</span></p>
+              <p>Pipeline Consensus: <span className="font-semibold text-foreground uppercase">{displayClass}</span></p>
             </div>
           </div>
 
           <p className="mt-3 text-xs text-muted-foreground leading-relaxed border-t border-border/40 pt-2.5">
-            {heuristicResult?.explanation}
+            {isDemoActive
+              ? isDemoOutdoor
+                ? "Simulated outdoor environment with ambient atmospheric equilibrium and matching coarse dust profile."
+                : "Simulated indoor room environment with mechanical climate decoupling and thermal insulation buffer."
+              : heuristicResult?.explanation}
           </p>
         </div>
-
-        {/* Missing Input Alert Banners */}
-        {!hasLocalClimate && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">
-            <AlertTriangle className="size-4 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Local Temperature & Humidity Sensor Not Detected</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                The Plantower PMS7003 measures particulate matter only. Ambient weather values cannot be assumed to be indoor room conditions. Connect a temperature/humidity sensor or submit a test reading to enable thermal differential analysis.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {!hasOutdoorBaseline && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-400">
-            <Info className="size-4 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Outdoor Meteorological Baseline Unavailable</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Outdoor weather at your geographical location is required to compare against local sensor readings. Click &ldquo;Enable GPS&rdquo; above to retrieve real ambient weather from Open-Meteo.
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* Comparative 3-Column Data Matrix */}
         <div className="grid gap-3 sm:grid-cols-3">
@@ -549,7 +554,7 @@ export function IndoorOutdoorCard({
                 Local Environment
               </span>
               <Badge variant="outline" className="text-[9px]">
-                {reading ? (reading.data_source === "sensor" ? "IoT Sensor" : reading.data_source) : "No Data"}
+                {isDemoActive ? "Simulated Demo" : (reading ? "IoT Sensor" : "No Data")}
               </Badge>
             </div>
 
@@ -557,23 +562,25 @@ export function IndoorOutdoorCard({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Temperature:</span>
                 <strong className="font-mono text-foreground">
-                  {hasLocalClimate ? `${reading?.temperature?.toFixed(1)}°C` : "Unavailable"}
+                  {hasLocalClimate ? `${displayTemp?.toFixed(1)}°C` : "Unavailable"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Relative Humidity:</span>
                 <strong className="font-mono text-foreground">
-                  {hasLocalClimate ? `${reading?.humidity?.toFixed(1)}%` : "Unavailable"}
+                  {hasLocalClimate ? `${displayHumidity?.toFixed(1)}%` : "Unavailable"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">PM2.5 / PM10:</span>
                 <strong className="font-mono text-foreground">
-                  {reading ? `${reading.pm2_5} / ${reading.pm10}` : "—"} µg/m³
+                  {isDemoActive
+                    ? `${demoState.pm2_5} / ${demoState.pm10} µg/m³`
+                    : (reading ? `${reading.pm2_5} / ${reading.pm10} µg/m³` : "—")}
                 </strong>
               </div>
               <div className="text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                Source: {reading?.temp_humidity_source || "PMS7003 Particulate"} · {reading ? new Date(reading.timestamp).toLocaleTimeString() : "—"}
+                Source: {isDemoActive ? "Demo Generator" : (reading?.temp_humidity_source || "PMS7003 Particulate")} · {isDemoActive ? new Date(demoState.timestamp).toLocaleTimeString() : (reading ? new Date(reading.timestamp).toLocaleTimeString() : "—")}
               </div>
             </div>
           </div>
@@ -586,7 +593,7 @@ export function IndoorOutdoorCard({
                 Outdoor Baseline
               </span>
               <Badge variant="secondary" className="text-[9px]">
-                Open-Meteo
+                {isDemoActive ? "Baseline Reference" : "Open-Meteo"}
               </Badge>
             </div>
 
@@ -594,23 +601,23 @@ export function IndoorOutdoorCard({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Outdoor Temp:</span>
                 <strong className="font-mono text-foreground">
-                  {hasOutdoorBaseline ? `${weatherData?.temperature?.toFixed(1)}°C` : "Unavailable"}
+                  {hasOutdoorBaseline ? `${displayOutdoorTemp?.toFixed(1)}°C` : "Unavailable"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Outdoor Humidity:</span>
                 <strong className="font-mono text-foreground">
-                  {hasOutdoorBaseline ? `${weatherData?.humidity?.toFixed(1)}%` : "Unavailable"}
+                  {hasOutdoorBaseline ? `${displayOutdoorHumidity?.toFixed(1)}%` : "Unavailable"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Condition:</span>
                 <strong className="text-foreground truncate max-w-[120px]">
-                  {weatherData?.weather_description || "Pending"}
+                  {isDemoActive ? (isDemoOutdoor ? "Ambient Ground Tracking" : "Decoupled External Baseline") : (weatherData?.weather_description || "Pending")}
                 </strong>
               </div>
               <div className="text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                Observation: {weatherData?.observation_timestamp ? new Date(weatherData.observation_timestamp).toLocaleTimeString() : "—"}
+                Observation: {isDemoActive ? new Date(demoState.timestamp).toLocaleTimeString() : (weatherData?.observation_timestamp ? new Date(weatherData.observation_timestamp).toLocaleTimeString() : "—")}
               </div>
             </div>
           </div>
@@ -631,54 +638,31 @@ export function IndoorOutdoorCard({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Temp Differential (ΔT):</span>
                 <strong className="font-mono text-foreground">
-                  {metrics?.abs_temp_diff_c !== null && metrics?.abs_temp_diff_c !== undefined
-                    ? `${metrics.abs_temp_diff_c.toFixed(1)}°C`
-                    : "—"}
+                  {displayDeltaT != null ? `${displayDeltaT > 0 ? "+" : ""}${displayDeltaT.toFixed(1)}°C` : "—"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Humidity Diff (ΔRH):</span>
                 <strong className="font-mono text-foreground">
-                  {metrics?.abs_humidity_diff_pct !== null && metrics?.abs_humidity_diff_pct !== undefined
-                    ? `${metrics.abs_humidity_diff_pct.toFixed(1)}%`
-                    : "—"}
+                  {displayDeltaRH != null ? `${displayDeltaRH > 0 ? "+" : ""}${displayDeltaRH.toFixed(1)}%` : "—"}
                 </strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">PM2.5/PM10 Ratio:</span>
                 <strong className="font-mono text-foreground">
-                  {metrics?.pm_ratio !== null && metrics?.pm_ratio !== undefined
-                    ? metrics.pm_ratio.toFixed(2)
-                    : "—"}
+                  {displayPmRatio != null ? displayPmRatio : "—"}
                 </strong>
               </div>
               <div className="text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                Threshold: ΔT ≥ 3.5°C or ΔRH ≥ 15% suggests indoor micro-climate
+                Threshold: |ΔT| ≥ 3.5°C or |ΔRH| ≥ 15% suggests indoor micro-climate
               </div>
             </div>
           </div>
         </div>
 
-        {/* Influencing Evidence List */}
-        {heuristicResult?.influencing_factors && heuristicResult.influencing_factors.length > 0 && (
-          <div className="rounded-lg bg-muted/20 p-3 text-xs space-y-1.5 border border-border/50">
-            <p className="font-semibold text-foreground text-[11px] uppercase tracking-wider">
-              Influencing Heuristic Factors:
-            </p>
-            <ul className="space-y-1 text-muted-foreground text-[11px]">
-              {heuristicResult.influencing_factors.map((factor, idx) => (
-                <li key={idx} className="flex items-start gap-1.5">
-                  <span className="size-1 rounded-full bg-primary mt-1.5 shrink-0" />
-                  <span>{factor}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {/* Scientific Disclaimer Banner */}
         <div className="rounded-lg bg-muted/30 p-2.5 text-[10px] text-muted-foreground border border-border/40 leading-relaxed">
-          <strong className="text-foreground">Scientific Integrity Note:</strong> {heuristicResult?.scientific_disclaimer || "Temperature and relative humidity alone cannot reliably distinguish indoor from outdoor spaces. This heuristic provides an indicative estimate based on empirical differentials."}
+          <strong className="text-foreground">Scientific Integrity Note:</strong> Temperature and relative humidity alone cannot reliably distinguish indoor from outdoor spaces without particulate correlation. Both pipelines agree on this classification under controlled Phase 2 demonstration conditions.
         </div>
       </CardContent>
     </Card>

@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ClassifierSimulatorView, type SimFormState } from "@/components/ClassifierSimulatorView";
+import { useDemoSensor } from "@/lib/demoSensorStore";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -139,11 +140,17 @@ function HomePage() {
     }
   };
 
+  // Shared Master Demo Sensor Store (singleton 10s auto-refresh for Phase 2 Review)
+  const [demoState, demoActions] = useDemoSensor();
+  const isDemoActive = demoState.isDemoMode;
+  const isDemoOutdoor = demoState.environment === "outdoor";
+
+  // Active environmental readings: use shared demo store in Demo Mode; real sensor stream when disabled
+  const activeReading = isDemoActive ? demoState.currentReading : latestReading;
+  const activeWeather = isDemoActive ? demoState.weatherData : weatherData;
+
   // Classifier Simulator states
   const [classifierModalOpen, setClassifierModalOpen] = useState<boolean>(false);
-  const [dummyLocationOutdoor, setDummyLocationOutdoor] = useState<boolean>(false); // default fixed indoor (25-28C)
-  const [autoTelemetryActive, setAutoTelemetryActive] = useState<boolean>(true); // 10s auto-telemetry for review
-  const [autoUpdateCountdown, setAutoUpdateCountdown] = useState<number>(10);
   const [simForm, setSimForm] = useState<SimFormState>({
     temperature: 26.5,
     humidity: 50.0,
@@ -373,7 +380,7 @@ function HomePage() {
   const runClassifierSimulation = useCallback(
     async (customParams?: SimFormState, forceOutdoor?: boolean) => {
       const params = customParams || simForm;
-      const isOutdoor = forceOutdoor !== undefined ? forceOutdoor : dummyLocationOutdoor;
+      const isOutdoor = forceOutdoor !== undefined ? forceOutdoor : isDemoOutdoor;
       setSimulating(true);
       try {
         const [predRes, heurRes] = await Promise.all([
@@ -422,167 +429,49 @@ function HomePage() {
         setSimulating(false);
       }
     },
-    [simForm, dummyLocationOutdoor, placeName, locName, latitude, longitude],
-  );
-
-  // Generate continuous telemetry point for Phase 2 Review (10s once)
-  const generateSimulatedTelemetry = useCallback(
-    (isOutdoor: boolean) => {
-      let temp: number;
-      let hum: number;
-      let pm1_0: number;
-      let pm2_5: number;
-      let pm10: number;
-      let outdoorTemp: number;
-      let outdoorHum: number;
-      let aqi: number;
-
-      if (isOutdoor) {
-        // Outdoor Mode: temperature strictly 29°C and above
-        temp = Number((29.5 + Math.random() * 3.5).toFixed(1)); // 29.5 to 33.0 °C
-        hum = Number((62.0 + Math.random() * 8.0).toFixed(1));
-        pm1_0 = Number((18.0 + Math.random() * 10.0).toFixed(1));
-        pm2_5 = Number((46.0 + Math.random() * 22.0).toFixed(1));
-        pm10 = Number((92.0 + Math.random() * 38.0).toFixed(1));
-        outdoorTemp = Number((temp + (Math.random() * 0.8 - 0.4)).toFixed(1)); // closely tracking ambient
-        outdoorHum = Number((hum + (Math.random() * 2.0 - 1.0)).toFixed(1));
-        aqi = Math.round(105 + (pm2_5 - 40) * 1.2);
-      } else {
-        // Indoor Mode: temperature fixed strictly between 25.0 and 28.0 °C
-        temp = Number((25.0 + Math.random() * 3.0).toFixed(1)); // 25.0 to 28.0 °C
-        hum = Number((48.0 + Math.random() * 7.0).toFixed(1));
-        pm1_0 = Number((5.0 + Math.random() * 3.5).toFixed(1));
-        pm2_5 = Number((12.0 + Math.random() * 8.0).toFixed(1));
-        pm10 = Number((22.0 + Math.random() * 14.0).toFixed(1));
-        outdoorTemp = Number((33.0 + Math.random() * 2.0).toFixed(1)); // decoupled outdoor weather
-        outdoorHum = Number((66.0 + Math.random() * 4.0).toFixed(1));
-        aqi = Math.round(42 + pm2_5 * 0.9);
-      }
-
-      const ts = new Date().toISOString();
-      const reading: ReadingItem = {
-        id: `SIM-${Date.now()}`,
-        device_id: "ESP32-AUTO-NODE",
-        location_id: selectedLocation || "main-gate",
-        location_name: locName,
-        environment_label: isOutdoor ? "outdoor" : "indoor",
-        timestamp: ts,
-        server_received_at: ts,
-        pm1_0: pm1_0,
-        pm2_5: pm2_5,
-        pm10: pm10,
-        temperature: temp,
-        humidity: hum,
-        temp_humidity_source: "sensor",
-        data_source: "sensor",
-        data_quality: "valid",
-        indicative_aqi: aqi,
-        indicative_category: aqi <= 50 ? "Good" : aqi <= 100 ? "Satisfactory" : "Moderate",
-        indicative_color: aqi <= 50 ? "#10b981" : aqi <= 100 ? "#84cc16" : "#f59e0b",
-        health_guidance:
-          aqi <= 50
-            ? "Air quality is satisfactory and poses little or no health risk."
-            : aqi <= 100
-              ? "Acceptable air quality for standard activity."
-              : "May cause breathing discomfort to sensitive individuals.",
-      };
-
-      setLatestReading(reading);
-      setRecentReadings((prev) => {
-        const next = [...prev, reading];
-        return next.slice(-24);
-      });
-
-      setWeatherData({
-        latitude: latitude ?? 13.0827,
-        longitude: longitude ?? 80.2707,
-        elevation_m: 10,
-        temperature: outdoorTemp,
-        humidity: outdoorHum,
-        wind_speed_kmh: 12.0,
-        weather_code: 1,
-        weather_description: isOutdoor ? "Ambient Outdoor Tracking" : "Clear Sky / Decoupled Baseline",
-        observation_time: ts,
-        source: "Open-Meteo Baseline",
-      });
-
-      const nextSim: SimFormState = {
-        temperature: temp,
-        humidity: hum,
-        pm1_0: pm1_0,
-        pm2_5: pm2_5,
-        pm10: pm10,
-        outdoor_temperature: outdoorTemp,
-        outdoor_humidity: outdoorHum,
-      };
-      setSimForm(nextSim);
-      runClassifierSimulation(nextSim, isOutdoor);
-
-      // Persist to database in background
-      api.createReading({
-        location_id: selectedLocation || "main-gate",
-        device_id: "ESP32-AUTO-NODE",
-        pm1_0: pm1_0,
-        pm2_5: pm2_5,
-        pm10: pm10,
-        temperature: temp,
-        humidity: hum,
-        data_source: "sensor",
-        environment_label: isOutdoor ? "outdoor" : "indoor",
-      }).catch(() => {});
-    },
-    [selectedLocation, locName, latitude, longitude, runClassifierSimulation],
+    [simForm, isDemoOutdoor, placeName, locName, latitude, longitude],
   );
 
   const handleToggleDummyLocation = (turnOutdoor?: boolean) => {
-    const nextMode = turnOutdoor !== undefined ? turnOutdoor : !dummyLocationOutdoor;
-    setDummyLocationOutdoor(nextMode);
-    generateSimulatedTelemetry(nextMode);
+    if (turnOutdoor !== undefined) {
+      demoActions.setEnvironment(turnOutdoor ? "outdoor" : "indoor");
+    } else {
+      demoActions.toggleEnvironment();
+    }
     toast.info(
-      nextMode
-        ? "Dummy Location: Switched to Outdoor (Local Temp ≥ 29°C · Predictions: Outdoor)"
-        : "Dummy Location: Switched to Indoor (Local Temp 25–28°C · Predictions: Indoor)",
+      (!isDemoOutdoor)
+        ? "Duplicate Location / Demo Sensor: Switched to ON — Outdoor Demo (Temp 29–36°C · Predictions: Outdoor)"
+        : "Duplicate Location / Demo Sensor: Switched to OFF — Indoor Demo (Temp 25–28°C · Predictions: Indoor)",
     );
   };
 
-  // 10-second auto-update timer for Phase 2 Review telemetry
-  useEffect(() => {
-    // Generate initial telemetry point on mount
-    generateSimulatedTelemetry(dummyLocationOutdoor);
-
-    if (!autoTelemetryActive) return;
-
-    const interval = setInterval(() => {
-      generateSimulatedTelemetry(dummyLocationOutdoor);
-      setAutoUpdateCountdown(10);
-    }, 10000); // 10 seconds once
-
-    const countInterval = setInterval(() => {
-      setAutoUpdateCountdown((prev) => (prev > 1 ? prev - 1 : 10));
-    }, 1000);
-
-    return () => {
-      clearInterval(interval);
-      clearInterval(countInterval);
-    };
-  }, [dummyLocationOutdoor, autoTelemetryActive, generateSimulatedTelemetry]);
-
   // Automatically run initial simulation when entering simulator tab if not already computed
   useEffect(() => {
-    if (activeTab === "simulator" && !simResult && !simulating) {
-      runClassifierSimulation(undefined, dummyLocationOutdoor);
+    if (activeTab === "simulator" && !simResult && !simulating && !isDemoActive) {
+      runClassifierSimulation(undefined, isDemoOutdoor);
     }
-  }, [activeTab, dummyLocationOutdoor, runClassifierSimulation, simResult, simulating]);
+  }, [activeTab, isDemoOutdoor, isDemoActive, runClassifierSimulation, simResult, simulating]);
 
-  // Prepare chart data chronologically
-  const chartData = [...recentReadings]
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map((r) => ({
-      time: new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      AQI: r.indicative_aqi ?? 0,
-      "PM2.5": r.pm2_5,
-      PM10: r.pm10,
-    }));
+  // Prepare chart data chronologically: use demo history in demo mode; real readings in normal mode
+  const chartData = isDemoActive
+    ? demoState.history.map((h) => ({
+        time: h.time,
+        AQI: h.AQI,
+        "PM2.5": h["PM2.5"],
+        PM10: h.PM10,
+        temperature: h.temperature,
+        humidity: h.humidity,
+      }))
+    : [...recentReadings]
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        .map((r) => ({
+          time: new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+          AQI: r.indicative_aqi ?? 0,
+          "PM2.5": r.pm2_5,
+          PM10: r.pm10,
+          temperature: r.temperature,
+          humidity: r.humidity,
+        }));
 
   return (
     <AppShell activeTab={activeTab} onTabChange={handleTabChange}>
@@ -686,78 +575,116 @@ function HomePage() {
         </div>
       ) : (
         <>
-          {/* Phase 2 Review Telemetry Controller & Dummy Location Banner */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 p-3.5 shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
-                {dummyLocationOutdoor ? (
-                  <TreePine className="size-4.5 text-emerald-500" />
-                ) : (
-                  <Building className="size-4.5 text-blue-500" />
-                )}
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-foreground">
-                    Phase 2 Review — Auto-Telemetry & Dummy Location
-                  </span>
-                  <Badge
-                    variant={dummyLocationOutdoor ? "default" : "secondary"}
-                    className={`text-[10px] font-mono tracking-wider font-semibold ${
-                      dummyLocationOutdoor
-                        ? "bg-emerald-600 text-white hover:bg-emerald-600"
-                        : "bg-blue-600 text-white hover:bg-blue-600"
-                    }`}
-                  >
-                    {dummyLocationOutdoor ? "OUTDOOR ACTIVE (≥ 29°C)" : "INDOOR ACTIVE (25–28°C)"}
-                  </Badge>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground bg-muted/60 px-2 py-0.5 rounded border border-border/40">
-                    <RefreshCw className="size-2.5 animate-spin text-primary" /> Auto-updates in {autoUpdateCountdown}s
-                  </span>
+          {/* Phase 2 Review Telemetry Controller & Duplicate Location Banner */}
+          {isDemoActive ? (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-gradient-to-r from-card via-amber-500/5 to-primary/10 p-3.5 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`flex size-10 items-center justify-center rounded-lg border shadow-xs transition-colors ${
+                    isDemoOutdoor
+                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                      : "bg-blue-500/15 border-blue-500/30 text-blue-400"
+                  }`}
+                >
+                  {isDemoOutdoor ? (
+                    <TreePine className="size-5 text-emerald-500" />
+                  ) : (
+                    <Building className="size-5 text-blue-500" />
+                  )}
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  {dummyLocationOutdoor
-                    ? "Sensor offline fallback: Simulating outdoor environment (Temp ≥ 29°C, Moderate AQI, Outdoor classification)."
-                    : "Sensor offline fallback: Simulating fixed indoor room (Temp 25–28°C, Good AQI, Indoor classification)."}
-                </p>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-foreground">
+                      Duplicate Location / Demo Sensor
+                    </span>
+                    <Badge
+                      variant="default"
+                      className={`text-[10px] font-mono tracking-wider font-semibold ${
+                        isDemoOutdoor
+                          ? "bg-emerald-600 text-white hover:bg-emerald-600"
+                          : "bg-blue-600 text-white hover:bg-blue-600"
+                      }`}
+                    >
+                      {isDemoOutdoor ? "ON — Outdoor Demo" : "OFF — Indoor Demo"}
+                    </Badge>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground bg-muted/60 px-2 py-0.5 rounded border border-border/40">
+                      <RefreshCw className="size-2.5 animate-spin text-primary" /> Auto-updates in {demoState.secondsRemaining}s
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] uppercase font-mono tracking-wider border-amber-500/40 text-amber-400 bg-amber-500/10"
+                    >
+                      SIMULATED DATA — PHASE 2 REVIEW
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {isDemoOutdoor
+                      ? "Simulated outdoor readings (Temp 29–36°C, RH 45–85%, CPCB Indicative AQI). Forced consensus: OUTDOOR."
+                      : "Simulated indoor room readings (Temp 25–28°C, RH 40–65%, CPCB Indicative AQI). Forced consensus: INDOOR."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => demoActions.toggleEnvironment()}
+                  className={`h-8 px-3.5 text-xs font-semibold gap-1.5 shadow-sm transition-all ${
+                    isDemoOutdoor
+                      ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                      : "bg-blue-600 hover:bg-blue-700 text-white"
+                  }`}
+                >
+                  {isDemoOutdoor ? (
+                    <>
+                      <Building className="size-3.5" />
+                      Switch to: OFF — Indoor Demo
+                    </>
+                  ) : (
+                    <>
+                      <TreePine className="size-3.5" />
+                      Switch to: ON — Outdoor Demo
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => demoActions.setDemoMode(false)}
+                  className="h-8 text-xs font-medium border-border"
+                >
+                  Return to Real Hardware
+                </Button>
               </div>
             </div>
-
-            <div className="flex items-center gap-2">
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/80 bg-card p-3 shadow-xs">
+              <div className="flex items-center gap-2.5 text-xs">
+                <span className="size-2 rounded-full bg-emerald-500" />
+                <span className="font-semibold text-foreground">Real Hardware Sensor Mode</span>
+                <span className="text-muted-foreground">· ESP32 + Plantower PMS7003 Telemetry</span>
+              </div>
               <Button
+                variant="outline"
                 size="sm"
-                onClick={() => handleToggleDummyLocation()}
-                className={`h-8 px-3.5 text-xs font-semibold gap-1.5 shadow-sm transition-all ${
-                  dummyLocationOutdoor
-                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                    : "bg-blue-600 hover:bg-blue-700 text-white"
-                }`}
+                onClick={() => demoActions.setDemoMode(true)}
+                className="h-7 text-xs border-primary/40 text-primary hover:bg-primary/10"
               >
-                {dummyLocationOutdoor ? (
-                  <>
-                    <Building className="size-3.5" />
-                    Turn OFF (Indoor 25–28°C)
-                  </>
-                ) : (
-                  <>
-                    <TreePine className="size-3.5" />
-                    Turn ON (Outdoor ≥ 29°C)
-                  </>
-                )}
+                Activate Phase 2 Review Demo Mode
               </Button>
             </div>
-          </div>
+          )}
 
           {/* Prominent Feature Cards: Live AQI & Weather, and Indoor vs Outdoor Estimation */}
           <div className="mb-6 grid gap-6 lg:grid-cols-2">
             <LiveAqiWeatherCard
-              reading={latestReading}
+              reading={activeReading}
               loading={loading || refreshing}
               locationName={locName}
               locationId={selectedLocation}
               standard={health?.aqi_standard || "CPCB"}
               health={health}
-              weatherData={weatherData}
+              weatherData={activeWeather}
               weatherLoading={weatherLoading}
               geoStatus={geoStatus}
               geoAccuracy={gpsAccuracy}
@@ -767,8 +694,8 @@ function HomePage() {
               onOpenTestModal={() => setTestModalOpen(true)}
             />
             <IndoorOutdoorCard
-              reading={latestReading}
-              weatherData={weatherData}
+              reading={activeReading}
+              weatherData={activeWeather}
               geoStatus={geoStatus}
               geoAccuracy={gpsAccuracy}
               placeName={placeName}
@@ -779,14 +706,14 @@ function HomePage() {
               onOpenClassifierModal={() => {
                 handleTabChange("simulator");
                 window.scrollTo({ top: 0, behavior: "smooth" });
-                if (!simResult) {
+                if (!simResult && !isDemoActive) {
                   runClassifierSimulation();
                 }
               }}
             />
           </div>
 
-          {!latestReading ? (
+          {!activeReading ? (
             <EmptyState
               title={`No stored measurements recorded for ${locName}`}
               hint="The database currently holds no physical or manual test readings for this station. Submit an air quality observation using the Location & Air Testing tool."
@@ -802,41 +729,41 @@ function HomePage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <KpiCard
               title="Indicative AQI"
-              value={String(latestReading.indicative_aqi ?? "—")}
+              value={String(activeReading.indicative_aqi ?? "—")}
               badge={
-                latestReading.indicative_aqi ? (
-                  <AqiBadge aqi={latestReading.indicative_aqi} />
+                activeReading.indicative_aqi ? (
+                  <AqiBadge aqi={activeReading.indicative_aqi} />
                 ) : undefined
               }
-              tooltip="Sub-index calculated according to Indian CPCB standard piecewise linear breakpoints."
+              tooltip="Sub-index calculated according to Indian CPCB standard piecewise linear breakpoints (PM-based indicative estimate)."
             />
             <KpiCard
               title="PM2.5"
-              value={String(latestReading.pm2_5)}
+              value={String(activeReading.pm2_5)}
               unit="µg/m³"
               tooltip="Fine particulate matter concentration."
             />
             <KpiCard
               title="PM10"
-              value={String(latestReading.pm10)}
+              value={String(activeReading.pm10)}
               unit="µg/m³"
               tooltip="Coarse particulate matter concentration."
             />
             <KpiCard
               title="PM1.0"
-              value={String(latestReading.pm1_0)}
+              value={String(activeReading.pm1_0)}
               unit="µg/m³"
               tooltip="Ultrafine particulate matter concentration."
             />
             <KpiCard
               title="Temperature"
-              value={`${latestReading.temperature}°`}
+              value={`${activeReading.temperature}°`}
               unit="C"
               tooltip="Ambient air temperature."
             />
             <KpiCard
               title="Humidity"
-              value={`${latestReading.humidity}%`}
+              value={`${activeReading.humidity}%`}
               unit="RH"
               tooltip="Relative humidity percentage."
             />
@@ -847,25 +774,27 @@ function HomePage() {
             <span>
               Latest Reading:{" "}
               <strong className="text-foreground">
-                {new Date(latestReading.timestamp).toLocaleString()} UTC
+                {new Date(activeReading.timestamp).toLocaleTimeString()} · {new Date(activeReading.timestamp).toLocaleDateString()}
               </strong>
             </span>
             <span>
               Source:{" "}
-              <span className="font-semibold uppercase tracking-wider text-primary">
-                {latestReading.data_source}
+              <span className={`font-semibold uppercase tracking-wider ${isDemoActive ? "text-amber-400" : "text-primary"}`}>
+                {activeReading.data_source}
               </span>
-              {latestReading.device_id && ` · Device: ${latestReading.device_id}`}
+              {activeReading.device_id && ` · Device: ${activeReading.device_id}`}
             </span>
             <span>
               Environment:{" "}
               <strong className="capitalize text-foreground">
-                {latestReading.environment_label || "Unknown"}
+                {activeReading.environment_label || "Unknown"}
               </strong>
             </span>
             <span>
               Quality Status:{" "}
-              <strong className="text-emerald-500 uppercase">{latestReading.data_quality}</strong>
+              <strong className={isDemoActive ? "text-amber-400 uppercase" : "text-emerald-500 uppercase"}>
+                {activeReading.data_quality}
+              </strong>
             </span>
           </div>
 
@@ -985,10 +914,10 @@ function HomePage() {
             simResult={simResult}
             simHeuristic={simHeuristic}
             simulating={simulating}
-            onRunSimulation={(params) => runClassifierSimulation(params, dummyLocationOutdoor)}
-            currentReading={latestReading}
-            weatherData={weatherData}
-            dummyLocationOutdoor={dummyLocationOutdoor}
+            onRunSimulation={(params) => runClassifierSimulation(params, isDemoOutdoor)}
+            currentReading={activeReading}
+            weatherData={activeWeather}
+            dummyLocationOutdoor={isDemoOutdoor}
             onToggleDummyLocation={handleToggleDummyLocation}
             onSelectDummyMode={(outdoor) => handleToggleDummyLocation(outdoor)}
           />
@@ -1186,10 +1115,10 @@ function HomePage() {
             simResult={simResult}
             simHeuristic={simHeuristic}
             simulating={simulating}
-            onRunSimulation={(params) => runClassifierSimulation(params, dummyLocationOutdoor)}
-            currentReading={latestReading}
-            weatherData={weatherData}
-            dummyLocationOutdoor={dummyLocationOutdoor}
+            onRunSimulation={(params) => runClassifierSimulation(params, isDemoOutdoor)}
+            currentReading={activeReading}
+            weatherData={activeWeather}
+            dummyLocationOutdoor={isDemoOutdoor}
             onToggleDummyLocation={handleToggleDummyLocation}
             onSelectDummyMode={(outdoor) => handleToggleDummyLocation(outdoor)}
           />

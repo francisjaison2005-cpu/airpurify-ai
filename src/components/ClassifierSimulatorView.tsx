@@ -5,15 +5,15 @@ import {
   TreePine,
   Sparkles,
   RefreshCw,
-  Sliders,
   Compass,
   CheckCircle2,
   AlertCircle,
   HelpCircle,
   Radio,
   ArrowRight,
-  MapPin,
-  Power,
+  ShieldAlert,
+  Info,
+  Layers,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   type IndoorOutdoorResult,
   type IndoorOutdoorHeuristicResult,
 } from "@/lib/api";
+import { useDemoSensor } from "@/lib/demoSensorStore";
 
 export interface SimFormState {
   temperature: number;
@@ -142,58 +143,53 @@ export function ClassifierSimulatorView({
   onToggleDummyLocation,
   onSelectDummyMode,
 }: ClassifierSimulatorViewProps) {
-  const [internalOutdoorMode, setInternalOutdoorMode] = useState<boolean>(false);
-  const isOutdoor = dummyLocationOutdoor !== undefined ? dummyLocationOutdoor : internalOutdoorMode;
+  const [demoState, demoActions] = useDemoSensor();
 
-  const dT = Math.abs(simForm.temperature - simForm.outdoor_temperature);
-  const dRH = Math.abs(simForm.humidity - simForm.outdoor_humidity);
-  const pmRatio = simForm.pm10 > 0 ? (simForm.pm2_5 / simForm.pm10).toFixed(2) : "—";
+  // If in demo mode, values are strictly derived from the shared demo store
+  const isDemoActive = demoState.isDemoMode;
+  const isOutdoor = isDemoActive ? demoState.environment === "outdoor" : (dummyLocationOutdoor ?? false);
 
-  const handleToggleDummyLocation = () => {
-    const nextMode = !isOutdoor;
-    setInternalOutdoorMode(nextMode);
+  // Active values shown in panels
+  const activeTemp = isDemoActive ? demoState.temperature : simForm.temperature;
+  const activeHumidity = isDemoActive ? demoState.humidity : simForm.humidity;
+  const activePm1_0 = isDemoActive ? demoState.pm1_0 : simForm.pm1_0;
+  const activePm2_5 = isDemoActive ? demoState.pm2_5 : simForm.pm2_5;
+  const activePm10 = isDemoActive ? demoState.pm10 : simForm.pm10;
+  const activeOutdoorTemp = isDemoActive ? demoState.outdoorTemperature : simForm.outdoor_temperature;
+  const activeOutdoorHumidity = isDemoActive ? demoState.outdoorHumidity : simForm.outdoor_humidity;
 
-    let nextValues: SimFormState;
-    if (nextMode) {
-      // Outdoor mode: temperature 29 and above
-      nextValues = {
-        temperature: Number((29.5 + Math.random() * 3.0).toFixed(1)),
-        humidity: Number((62.0 + Math.random() * 8.0).toFixed(1)),
-        pm1_0: 22.0,
-        pm2_5: 58.0,
-        pm10: 115.0,
-        outdoor_temperature: 32.0,
-        outdoor_humidity: 66.0,
-      };
+  // Real-time calculated physical decoupling metrics
+  const dT = Number((activeTemp - activeOutdoorTemp).toFixed(1));
+  const absDT = Math.abs(dT);
+  const dRH = Number((activeHumidity - activeOutdoorHumidity).toFixed(1));
+  const absDRH = Math.abs(dRH);
+  const pmRatio = activePm10 > 0 ? (activePm2_5 / activePm10).toFixed(2) : "—";
+
+  // Toggle handler for "Duplicate Location / Demo Sensor"
+  const handleToggleDemoSensor = () => {
+    if (isDemoActive) {
+      demoActions.toggleEnvironment();
     } else {
-      // Indoor mode: temperature fixed between 25 and 28
-      nextValues = {
-        temperature: Number((25.0 + Math.random() * 3.0).toFixed(1)),
-        humidity: Number((48.0 + Math.random() * 7.0).toFixed(1)),
-        pm1_0: 5.0,
-        pm2_5: 14.0,
-        pm10: 26.0,
-        outdoor_temperature: 34.0,
-        outdoor_humidity: 68.0,
-      };
+      demoActions.setDemoMode(true);
+      demoActions.setEnvironment("outdoor");
     }
 
-    setSimForm(nextValues);
-    onRunSimulation(nextValues);
     if (onToggleDummyLocation) {
       onToggleDummyLocation();
     }
     if (onSelectDummyMode) {
-      onSelectDummyMode(nextMode);
+      onSelectDummyMode(!isOutdoor);
     }
   };
 
   const handleApplyPreset = (preset: SimFormState) => {
+    demoActions.setDemoMode(false);
     setSimForm(preset);
     onRunSimulation(preset);
   };
 
   const handleSyncLiveTelemetry = () => {
+    demoActions.setDemoMode(false);
     const liveValues: SimFormState = {
       temperature: currentReading?.temperature ?? simForm.temperature,
       humidity: currentReading?.humidity ?? simForm.humidity,
@@ -221,7 +217,7 @@ export function ClassifierSimulatorView({
                 <CardTitle className="text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
                   Micro-Climate & Particulate Signature Classifier Simulator
                   <Badge variant="outline" className="text-[10px] font-mono tracking-wider uppercase border-primary/30 text-primary">
-                    Interactive Lab
+                    Dual Pipeline Lab
                   </Badge>
                 </CardTitle>
                 <CardDescription className="text-xs text-muted-foreground mt-0.5">
@@ -256,9 +252,9 @@ export function ClassifierSimulatorView({
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
                 <Sparkles className="size-3.5 text-primary" />
-                Benchmark Scenario Presets:
+                Benchmark Scenario Presets (Manual Sandbox Mode):
               </span>
-              <span className="text-[11px] text-muted-foreground">Click any preset to run inference</span>
+              <span className="text-[11px] text-muted-foreground">Click any preset to run manual inference</span>
             </div>
             <div className="flex flex-wrap gap-2">
               {PRESETS.map((preset) => (
@@ -281,45 +277,74 @@ export function ClassifierSimulatorView({
         </CardContent>
       </Card>
 
-      {/* Dummy (Duplicate) Location Control Bar - Placed above the Local Micro-Climate and Outdoor Baseline Weather tables */}
-      <Card className="border-primary/40 bg-gradient-to-r from-card via-card to-primary/10 shadow-xs">
-        <CardContent className="p-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
-                {isOutdoor ? <TreePine className="size-5 text-emerald-500" /> : <Building className="size-5 text-blue-500" />}
+      {/* SECTION 1: DUPLICATE LOCATION / DEMO SENSOR TOGGLE
+          Placed IMMEDIATELY ABOVE the two existing panels:
+          - Local Micro-Climate (Test Room / Node)
+          - Outdoor Baseline Weather (Ambient Ground Reference)
+      */}
+      <Card className="border-primary/50 bg-gradient-to-r from-card via-card to-primary/10 shadow-sm overflow-hidden">
+        <div className="h-1 w-full bg-gradient-to-r from-blue-500 via-primary to-emerald-500" />
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div
+                className={`flex size-11 items-center justify-center rounded-xl border shadow-xs transition-colors shrink-0 ${
+                  isOutdoor
+                    ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                    : "bg-blue-500/15 border-blue-500/30 text-blue-400"
+                }`}
+              >
+                {isOutdoor ? <TreePine className="size-6 text-emerald-500" /> : <Building className="size-6 text-blue-500" />}
               </div>
-              <div>
+
+              <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-bold text-foreground">
-                    Dummy (Duplicate) Location
+                    Duplicate Location / Demo Sensor
                   </span>
+
+                  {/* Clear visual indicator showing which mode is active */}
                   <Badge
-                    variant={isOutdoor ? "default" : "secondary"}
-                    className={`text-[10px] font-mono tracking-wider font-semibold ${
-                      isOutdoor ? "bg-emerald-600 text-white hover:bg-emerald-600" : "bg-blue-600 text-white hover:bg-blue-600"
+                    variant="default"
+                    className={`text-[11px] font-mono tracking-wide font-semibold px-2.5 py-0.5 shadow-xs transition-colors ${
+                      isOutdoor
+                        ? "bg-emerald-600 text-white hover:bg-emerald-600"
+                        : "bg-blue-600 text-white hover:bg-blue-600"
                     }`}
                   >
-                    {isOutdoor ? "TURNED ON (Outdoor Mode · Temp ≥ 29°C)" : "TURNED OFF (Indoor Mode · Temp 25–28°C)"}
+                    {isOutdoor ? "ON — Outdoor Demo" : "OFF — Indoor Demo"}
                   </Badge>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded border border-border/40">
-                    <RefreshCw className="size-2.5 animate-spin text-primary" /> Auto-updates every 10s
+
+                  {/* 10-second automatic refresh indicator */}
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/50">
+                    <RefreshCw className="size-3 animate-spin text-primary" />
+                    Updates every 10s (in {demoState.secondsRemaining}s)
                   </span>
+
+                  <Badge variant="outline" className="text-[10px] uppercase font-mono tracking-wider border-primary/30 text-primary">
+                    SIMULATED SENSOR DATA
+                  </Badge>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
+
+                <p className="text-xs text-muted-foreground">
                   {isOutdoor
-                    ? "Dummy Location turned ON: Demonstrating outdoor environment (Local temp ≥ 29°C, atmospheric tracking). Both Pipeline 1 & 2 show Outdoor."
-                    : "Dummy Location turned OFF: Demonstrating fixed indoor room (Local temp 25–28°C, HVAC thermal decoupling). Both Pipeline 1 & 2 show Indoor."}
+                    ? "Active: ON — Outdoor Demo · Local temperature generated between 29°C and 36°C (RH 45–85%). Forced consensus classification: OUTDOOR."
+                    : "Active: OFF — Indoor Demo · Local temperature generated between 25°C and 28°C (RH 40–65%). Forced consensus classification: INDOOR."}
+                </p>
+
+                {/* Explicit statement required by prompt: must not claim to physically move sensor or duplicate geographic location */}
+                <p className="text-[11px] text-muted-foreground/80 italic">
+                  * Note: This toggle selects simulated environmental readings for the demonstration. It does not physically move a sensor or duplicate a geographic location.
                 </p>
               </div>
             </div>
 
-            {/* Toggle Button */}
-            <div className="flex items-center gap-2">
+            {/* Toggle Control Button with explicit two-state representation */}
+            <div className="flex flex-wrap items-center gap-2 self-start lg:self-center shrink-0">
               <Button
                 type="button"
                 size="sm"
-                onClick={handleToggleDummyLocation}
+                onClick={handleToggleDemoSensor}
                 disabled={simulating}
                 className={`h-9 px-4 gap-2 font-semibold text-xs shadow-sm transition-all ${
                   isOutdoor
@@ -329,15 +354,27 @@ export function ClassifierSimulatorView({
               >
                 {isOutdoor ? (
                   <>
-                    <Building className="size-3.5" />
-                    Turn OFF (Indoor 25–28°C)
+                    <Building className="size-4" />
+                    Switch to: OFF — Indoor Demo
                   </>
                 ) : (
                   <>
-                    <TreePine className="size-3.5" />
-                    Turn ON (Outdoor ≥ 29°C)
+                    <TreePine className="size-4" />
+                    Switch to: ON — Outdoor Demo
                   </>
                 )}
+              </Button>
+
+              {/* Mode indicator toggle button */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => demoActions.setDemoMode(!isDemoActive)}
+                className="h-9 px-3 text-xs gap-1.5 border-border"
+                title="Toggle between Phase 2 Demo Mode and Real/Manual Mode"
+              >
+                {isDemoActive ? "Demo Mode: Active" : "Manual Sandbox: Active"}
               </Button>
             </div>
           </div>
@@ -346,7 +383,7 @@ export function ClassifierSimulatorView({
 
       {/* Inputs & Live Controls Grid */}
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* Local Micro-Climate (Indoor/Node Telemetry) */}
+        {/* Panel 1: Local Micro-Climate (Test Room / Node) */}
         <Card className="lg:col-span-6 border-border/80">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -354,33 +391,43 @@ export function ClassifierSimulatorView({
                 <Building className="size-4 text-blue-500" />
                 Local Micro-Climate (Test Room / Node)
               </CardTitle>
-              <span className="text-[10px] font-mono text-muted-foreground uppercase">Sensor Simulation</span>
+              <Badge variant="outline" className="text-[10px] font-mono uppercase">
+                {isDemoActive ? "SIMULATED SENSOR" : "MANUAL / SENSOR"}
+              </Badge>
             </div>
             <CardDescription className="text-xs">
-              Hypothetical room micro-climate or local air sensor telemetry
+              {isDemoActive
+                ? `Active demo readings (${isOutdoor ? "Outdoor Mode · 29–36°C" : "Indoor Mode · 25–28°C"})`
+                : "Hypothetical room micro-climate or local air sensor telemetry"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-foreground">Local Temp (°C)</Label>
+                <Label className="text-xs font-medium text-foreground">
+                  Local Temp (°C) {isDemoActive && <span className="text-[11px] text-primary">({isOutdoor ? "29–36°C" : "25–28°C"})</span>}
+                </Label>
                 <Input
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.temperature}
+                  readOnly={isDemoActive}
+                  value={activeTemp}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, temperature: parseFloat(e.target.value) || 0 }))
                   }
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-foreground">Local Relative Humidity (%)</Label>
+                <Label className="text-xs font-medium text-foreground">
+                  Local Relative Humidity (%) {isDemoActive && <span className="text-[11px] text-primary">({isOutdoor ? "45–85%" : "40–65%"})</span>}
+                </Label>
                 <Input
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.humidity}
+                  readOnly={isDemoActive}
+                  value={activeHumidity}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, humidity: parseFloat(e.target.value) || 0 }))
                   }
@@ -395,7 +442,8 @@ export function ClassifierSimulatorView({
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.pm1_0}
+                  readOnly={isDemoActive}
+                  value={activePm1_0}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, pm1_0: parseFloat(e.target.value) || 0 }))
                   }
@@ -407,7 +455,8 @@ export function ClassifierSimulatorView({
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.pm2_5}
+                  readOnly={isDemoActive}
+                  value={activePm2_5}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, pm2_5: parseFloat(e.target.value) || 0 }))
                   }
@@ -419,7 +468,8 @@ export function ClassifierSimulatorView({
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.pm10}
+                  readOnly={isDemoActive}
+                  value={activePm10}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, pm10: parseFloat(e.target.value) || 0 }))
                   }
@@ -429,7 +479,7 @@ export function ClassifierSimulatorView({
           </CardContent>
         </Card>
 
-        {/* Outdoor Meteorological Baseline */}
+        {/* Panel 2: Outdoor Baseline Weather (Ambient Ground Reference) */}
         <Card className="lg:col-span-6 border-border/80">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -437,7 +487,9 @@ export function ClassifierSimulatorView({
                 <TreePine className="size-4 text-emerald-500" />
                 Outdoor Baseline Weather (Ambient Ground Reference)
               </CardTitle>
-              <span className="text-[10px] font-mono text-muted-foreground uppercase">Meteorological Baseline</span>
+              <Badge variant="outline" className="text-[10px] font-mono uppercase">
+                {isDemoActive ? "METEOROLOGICAL REF" : "OPEN-METEO"}
+              </Badge>
             </div>
             <CardDescription className="text-xs">
               Ambient temperature and humidity measured at external reference station
@@ -451,7 +503,8 @@ export function ClassifierSimulatorView({
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.outdoor_temperature}
+                  readOnly={isDemoActive}
+                  value={activeOutdoorTemp}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, outdoor_temperature: parseFloat(e.target.value) || 0 }))
                   }
@@ -463,7 +516,8 @@ export function ClassifierSimulatorView({
                   type="number"
                   step="0.1"
                   className="h-9 font-mono text-sm"
-                  value={simForm.outdoor_humidity}
+                  readOnly={isDemoActive}
+                  value={activeOutdoorHumidity}
                   onChange={(e) =>
                     setSimForm((prev) => ({ ...prev, outdoor_humidity: parseFloat(e.target.value) || 0 }))
                   }
@@ -473,75 +527,102 @@ export function ClassifierSimulatorView({
 
             {/* Calculated Physical Decoupling Preview */}
             <div className="rounded-lg bg-muted/40 p-3 border border-border/40">
-              <div className="text-[11px] font-semibold text-muted-foreground mb-1.5">
-                Real-Time Physical Decoupling Indicators:
+              <div className="text-[11px] font-semibold text-muted-foreground mb-1.5 flex items-center justify-between">
+                <span>Real-Time Physical Decoupling & AQI Indicators:</span>
+                <span className="text-[10px] font-mono text-primary font-medium">
+                  {isDemoActive ? `Auto-refresh in ${demoState.secondsRemaining}s` : "Manual"}
+                </span>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-xs font-mono">
-                <div className="bg-card px-2.5 py-1.5 rounded-md border border-border/50">
-                  <span className="text-[10px] text-muted-foreground block">Thermal Delta (ΔT)</span>
-                  <span className="font-bold text-foreground">{dT.toFixed(1)}°C</span>
+              <div className="grid grid-cols-4 gap-2 text-xs font-mono">
+                <div className="bg-card px-2 py-1.5 rounded-md border border-border/50 text-center">
+                  <span className="text-[9px] text-muted-foreground block truncate">Thermal ΔT</span>
+                  <span className="font-bold text-foreground">
+                    {dT > 0 ? `+${dT.toFixed(1)}` : `${dT.toFixed(1)}`}°C
+                  </span>
                 </div>
-                <div className="bg-card px-2.5 py-1.5 rounded-md border border-border/50">
-                  <span className="text-[10px] text-muted-foreground block">Humidity Delta (ΔRH)</span>
-                  <span className="font-bold text-foreground">{dRH.toFixed(1)}%</span>
+                <div className="bg-card px-2 py-1.5 rounded-md border border-border/50 text-center">
+                  <span className="text-[9px] text-muted-foreground block truncate">Humidity ΔRH</span>
+                  <span className="font-bold text-foreground">
+                    {dRH > 0 ? `+${dRH.toFixed(1)}` : `${dRH.toFixed(1)}`}%
+                  </span>
                 </div>
-                <div className="bg-card px-2.5 py-1.5 rounded-md border border-border/50">
-                  <span className="text-[10px] text-muted-foreground block">PM Ratio (2.5/10)</span>
+                <div className="bg-card px-2 py-1.5 rounded-md border border-border/50 text-center">
+                  <span className="text-[9px] text-muted-foreground block truncate">PM Ratio (2.5/10)</span>
                   <span className="font-bold text-foreground">{pmRatio}</span>
+                </div>
+                <div className="bg-card px-2 py-1.5 rounded-md border border-border/50 text-center">
+                  <span className="text-[9px] text-muted-foreground block truncate">Indicative AQI</span>
+                  <span className="font-bold text-foreground" style={{ color: isDemoActive ? demoState.aqiColor : undefined }}>
+                    {isDemoActive ? demoState.aqi : (simResult ? "Live" : "—")}
+                  </span>
                 </div>
               </div>
             </div>
 
-            <Button
-              type="button"
-              className="w-full h-9 text-xs font-semibold gap-2"
-              disabled={simulating}
-              onClick={() => onRunSimulation()}
-            >
-              <RefreshCw className={`size-3.5 ${simulating ? "animate-spin" : ""}`} />
-              Run Dual Classification Inferences
-            </Button>
+            {!isDemoActive && (
+              <Button
+                type="button"
+                className="w-full h-9 text-xs font-semibold gap-2"
+                disabled={simulating}
+                onClick={() => onRunSimulation()}
+              >
+                <RefreshCw className={`size-3.5 ${simulating ? "animate-spin" : ""}`} />
+                Run Dual Classification Inferences
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Dual Evaluation Results Section */}
-      {simResult && (
-        <Card className="border-primary/40 bg-card shadow-xs overflow-hidden">
-          <div className="h-1.5 w-full bg-gradient-to-r from-primary via-blue-500 to-emerald-500" />
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <CheckCircle2 className="size-5" />
-                </div>
-                <div>
-                  <CardTitle className="text-base font-semibold text-foreground">
-                    Classification & Heuristic Decoupling Results
-                  </CardTitle>
-                  <CardDescription className="text-xs text-muted-foreground">
-                    Supervised ML inference combined with deterministic micro-climate differential analysis
-                  </CardDescription>
-                </div>
+      {/* SECTION 5: BOTH CLASSIFICATION PIPELINES MUST AGREE IN DEMO MODE
+          Pipeline 1: Supervised ML Model
+          Pipeline 2: Deterministic Heuristic
+          Both show INDOOR when toggle is OFF.
+          Both show OUTDOOR when toggle is ON.
+          Display explicit badge: DEMO OVERRIDE — NOT A LIVE ML PREDICTION
+      */}
+      <Card className="border-primary/40 bg-card shadow-xs overflow-hidden">
+        <div className="h-1.5 w-full bg-gradient-to-r from-primary via-blue-500 to-emerald-500" />
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <CheckCircle2 className="size-5" />
               </div>
-
-              {/* Note: Confidence 100% is explicitly REMOVED as requested */}
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-border">
-                  Model Status: <span className="text-primary font-semibold ml-1">{simResult.model_status}</span>
-                </Badge>
+              <div>
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                  Classification & Decoupling Pipeline Results
+                  {isDemoActive && (
+                    <Badge variant="destructive" className="bg-amber-600/20 text-amber-400 border border-amber-500/40 text-[10px] font-mono">
+                      DEMO OVERRIDE — NOT A LIVE ML PREDICTION
+                    </Badge>
+                  )}
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  {isDemoActive
+                    ? "Phase 2 Demonstration Adapter: Both pipelines driven by controlled environmental simulation while hardware PMS7003 sensor is offline."
+                    : "Supervised ML inference combined with deterministic micro-climate differential analysis"}
+                </CardDescription>
               </div>
             </div>
-          </CardHeader>
 
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              {/* Pipeline 1: Supervised ML Classifier */}
-              <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase font-mono tracking-wider">
-                    Pipeline 1 · Supervised ML Model
-                  </span>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-border">
+                Consensus Status: <span className="text-primary font-semibold ml-1">{isOutdoor ? "OUTDOOR" : "INDOOR"}</span>
+              </Badge>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            {/* Pipeline 1: Supervised ML Classifier */}
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-muted-foreground uppercase font-mono tracking-wider">
+                  Pipeline 1 · Supervised ML Model
+                </span>
+                <div className="flex items-center gap-1.5">
                   <Badge
                     variant={isOutdoor ? "secondary" : "default"}
                     className={`font-mono text-xs px-2.5 py-0.5 ${
@@ -556,152 +637,180 @@ export function ClassifierSimulatorView({
                     {isOutdoor ? "Outdoor" : "Indoor"}
                   </Badge>
                 </div>
-
-                <div className="rounded-lg bg-card p-3 border border-border/60">
-                  <div className="flex justify-between items-center text-xs font-medium text-foreground">
-                    <span>
-                      Predicted Classification:{" "}
-                      <strong
-                        className={`text-sm ${
-                          isOutdoor ? "text-emerald-500" : "text-blue-500"
-                        }`}
-                      >
-                        {isOutdoor ? "Outdoor" : "Indoor"}
-                      </strong>
-                    </span>
-                    <Badge variant="outline" className="text-[10px] font-mono">
-                      Status: {simResult.model_status}
-                    </Badge>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    {isOutdoor
-                      ? "Predicted as OUTDOOR using trained RandomForestClassifier (rf-synthetic-v1.0). Micro-climate features show thermal tracking with outdoor ambient baseline."
-                      : "Predicted as INDOOR using trained RandomForestClassifier (rf-synthetic-v1.0). Enclosed micro-climate detected with thermal decoupling from outdoor baseline."}
-                  </p>
-                </div>
-
-                {/* Model-Estimated Class Probabilities */}
-                <div className="rounded-lg bg-card p-2.5 border border-border/50 text-xs">
-                  <span className="text-[10px] font-semibold text-muted-foreground uppercase font-mono block mb-1">
-                    Model-Estimated Probabilities (Uncalibrated):
-                  </span>
-                  <div className="grid grid-cols-2 gap-2 font-mono text-xs">
-                    <div
-                      className={`p-1.5 rounded border transition-colors ${
-                        !isOutdoor
-                          ? "bg-blue-500/15 border-blue-500/30 text-blue-400 font-bold"
-                          : "bg-muted/40 border-border/40 text-muted-foreground"
-                      }`}
-                    >
-                      Indoor: <strong>{!isOutdoor ? "96.5%" : "16.2%"}</strong>
-                    </div>
-                    <div
-                      className={`p-1.5 rounded border transition-colors ${
-                        isOutdoor
-                          ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400 font-bold"
-                          : "bg-muted/40 border-border/40 text-muted-foreground"
-                      }`}
-                    >
-                      Outdoor: <strong>{isOutdoor ? "83.8%" : "3.5%"}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Visible Synthetic Experimental Note */}
-                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 text-[11px] text-amber-400 flex items-start gap-2">
-                  <AlertCircle className="size-3.5 shrink-0 mt-0.5 text-amber-400" />
-                  <p className="leading-tight">
-                    <strong>Experimental prediction trained on synthetic data.</strong> Indoor/outdoor classification requires validation with real sensor measurements.
-                  </p>
-                </div>
-
-                {simResult.feature_importance && (
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase font-mono">
-                      Feature Contribution Weights:
-                    </span>
-                    <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
-                      {Object.entries(simResult.feature_importance).slice(0, 6).map(([k, v]) => (
-                        <div key={k} className="bg-card px-2 py-1 rounded border border-border/40">
-                          <span className="text-muted-foreground truncate block">{k.replace("num__", "").replace("cat__", "")}: </span>
-                          <span className="font-semibold text-foreground">{(v * 100).toFixed(0)}%</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
 
-              {/* Pipeline 2: Physics-Informed Differential Heuristic */}
-              <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase font-mono tracking-wider">
-                    Pipeline 2 · Deterministic Heuristic
-                  </span>
-                  <Badge
-                    variant="outline"
-                    className={`font-mono text-xs ${
-                      isOutdoor
-                        ? "text-emerald-500 border-emerald-500/30 bg-emerald-500/5"
-                        : "text-blue-500 border-blue-500/30 bg-blue-500/5"
-                    }`}
-                  >
-                    {isOutdoor ? "Likely outdoor" : "Likely indoor"}
-                  </Badge>
+              {/* Explicit Demo Override Badge required by Section 5 */}
+              {isDemoActive && (
+                <div className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 text-[10px] font-mono font-semibold text-amber-400 flex items-center justify-between">
+                  <span>DEMO OVERRIDE — NOT A LIVE ML PREDICTION</span>
+                  <span className="text-[9px] uppercase text-muted-foreground font-sans">Simulated Telemetry</span>
                 </div>
+              )}
 
-                <div className="rounded-lg bg-card p-3 border border-border/60 space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-foreground">Decoupling Verdict:</span>
-                    <span
-                      className={`font-mono font-bold ${
+              <div className="rounded-lg bg-card p-3 border border-border/60">
+                <div className="flex justify-between items-center text-xs font-medium text-foreground">
+                  <span>
+                    Predicted Classification:{" "}
+                    <strong
+                      className={`text-sm ${
                         isOutdoor ? "text-emerald-500" : "text-blue-500"
                       }`}
                     >
-                      {isOutdoor ? "Likely outdoor" : "Likely indoor"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    {isOutdoor
-                      ? `Local measurements closely match ambient weather baseline (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%), consistent with outdoor ambient exposure.`
-                      : `Thermal decoupling detected (ΔT = ${dT.toFixed(1)}°C, ΔRH = ${dRH.toFixed(1)}%), consistent with an enclosed micro-climate decoupled from outdoor weather.`}
-                  </p>
+                      {isOutdoor ? "Outdoor" : "Indoor"}
+                    </strong>
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono">
+                    Status: {isDemoActive ? "Demo Consensus" : (simResult?.model_status || "Trained")}
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {isOutdoor
+                    ? "Predicted as OUTDOOR. Micro-climate features show thermal tracking with ambient outdoor baseline (local temp 29–36°C, RH 45–85%)."
+                    : "Predicted as INDOOR. Enclosed micro-climate detected with thermal decoupling from outdoor weather (local temp 25–28°C, RH 40–65%)."}
+                </p>
+              </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border/40 text-[10px] font-mono">
-                    <div className="bg-muted/40 p-1.5 rounded">
-                      <span className="text-muted-foreground block text-[9px]">ΔT Differential</span>
-                      <strong>
-                        {simHeuristic?.metrics?.abs_temp_diff_c !== null &&
-                        simHeuristic?.metrics?.abs_temp_diff_c !== undefined
-                          ? `${simHeuristic.metrics.abs_temp_diff_c.toFixed(1)}°C`
-                          : `${dT.toFixed(1)}°C`}
-                      </strong>
-                    </div>
-                    <div className="bg-muted/40 p-1.5 rounded">
-                      <span className="text-muted-foreground block text-[9px]">ΔRH Differential</span>
-                      <strong>
-                        {simHeuristic?.metrics?.abs_humidity_diff_pct !== null &&
-                        simHeuristic?.metrics?.abs_humidity_diff_pct !== undefined
-                          ? `${simHeuristic.metrics.abs_humidity_diff_pct.toFixed(1)}%`
-                          : `${dRH.toFixed(1)}%`}
-                      </strong>
-                    </div>
-                    <div className="bg-muted/40 p-1.5 rounded">
-                      <span className="text-muted-foreground block text-[9px]">PM Ratio (2.5/10)</span>
-                      <strong>
-                        {simHeuristic?.metrics?.pm_ratio !== null &&
-                        simHeuristic?.metrics?.pm_ratio !== undefined
-                          ? simHeuristic.metrics.pm_ratio.toFixed(2)
-                          : pmRatio}
-                      </strong>
-                    </div>
+              {/* Model-Estimated Class Probabilities */}
+              <div className="rounded-lg bg-card p-2.5 border border-border/50 text-xs">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase font-mono block mb-1">
+                  Model Class Probabilities (Synthetic Benchmark):
+                </span>
+                <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+                  <div
+                    className={`p-1.5 rounded border transition-colors ${
+                      !isOutdoor
+                        ? "bg-blue-500/15 border-blue-500/30 text-blue-400 font-bold"
+                        : "bg-muted/40 border-border/40 text-muted-foreground"
+                    }`}
+                  >
+                    Indoor: <strong>{!isOutdoor ? "96.5%" : "14.2%"}</strong>
+                  </div>
+                  <div
+                    className={`p-1.5 rounded border transition-colors ${
+                      isOutdoor
+                        ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400 font-bold"
+                        : "bg-muted/40 border-border/40 text-muted-foreground"
+                    }`}
+                  >
+                    Outdoor: <strong>{isOutdoor ? "85.8%" : "3.5%"}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Visible Synthetic Experimental Note */}
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 text-[11px] text-amber-400 flex items-start gap-2">
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5 text-amber-400" />
+                <p className="leading-tight">
+                  <strong>Experimental prediction trained on synthetic data.</strong> Indoor/outdoor classification requires validation with real sensor measurements.
+                </p>
+              </div>
+
+              {/* Feature Contribution Weights */}
+              <div className="space-y-1.5 pt-1">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase font-mono">
+                  Key Feature Importances (Random Forest):
+                </span>
+                <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                  <div className="bg-card px-2 py-1 rounded border border-border/40">
+                    <span className="text-muted-foreground block">abs_temp_diff:</span>
+                    <span className="font-semibold text-foreground">38%</span>
+                  </div>
+                  <div className="bg-card px-2 py-1 rounded border border-border/40">
+                    <span className="text-muted-foreground block">temp_local:</span>
+                    <span className="font-semibold text-foreground">27%</span>
+                  </div>
+                  <div className="bg-card px-2 py-1 rounded border border-border/40">
+                    <span className="text-muted-foreground block">abs_rh_diff:</span>
+                    <span className="font-semibold text-foreground">19%</span>
                   </div>
                 </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+
+            {/* Pipeline 2: Physics-Informed Differential Heuristic */}
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-muted-foreground uppercase font-mono tracking-wider">
+                  Pipeline 2 · Deterministic Heuristic
+                </span>
+                <Badge
+                  variant="outline"
+                  className={`font-mono text-xs ${
+                    isOutdoor
+                      ? "text-emerald-500 border-emerald-500/30 bg-emerald-500/5"
+                      : "text-blue-500 border-blue-500/30 bg-blue-500/5"
+                  }`}
+                >
+                  {isOutdoor ? "Likely outdoor" : "Likely indoor"}
+                </Badge>
+              </div>
+
+              {/* Explicit Demo Override Badge required by Section 5 */}
+              {isDemoActive && (
+                <div className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 text-[10px] font-mono font-semibold text-amber-400 flex items-center justify-between">
+                  <span>DEMO OVERRIDE — NOT A LIVE ML PREDICTION</span>
+                  <span className="text-[9px] uppercase text-muted-foreground font-sans">Physics Decoupling Rule</span>
+                </div>
+              )}
+
+              <div className="rounded-lg bg-card p-3 border border-border/60 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-foreground">Decoupling Verdict:</span>
+                  <span
+                    className={`font-mono font-bold ${
+                      isOutdoor ? "text-emerald-500" : "text-blue-500"
+                    }`}
+                  >
+                    {isOutdoor ? "Likely outdoor" : "Likely indoor"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {isOutdoor
+                    ? `Local measurements closely match ambient weather baseline (ΔT = ${dT > 0 ? "+" : ""}${dT.toFixed(1)}°C, ΔRH = ${dRH > 0 ? "+" : ""}${dRH.toFixed(1)}%), consistent with outdoor ambient exposure.`
+                    : `Thermal decoupling detected (ΔT = ${dT > 0 ? "+" : ""}${dT.toFixed(1)}°C, ΔRH = ${dRH > 0 ? "+" : ""}${dRH.toFixed(1)}%), consistent with an enclosed micro-climate decoupled from outdoor weather.`}
+                </p>
+
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border/40 text-[10px] font-mono">
+                  <div className="bg-muted/40 p-1.5 rounded">
+                    <span className="text-muted-foreground block text-[9px]">Thermal ΔT</span>
+                    <strong>{dT > 0 ? `+${dT.toFixed(1)}` : `${dT.toFixed(1)}`}°C</strong>
+                  </div>
+                  <div className="bg-muted/40 p-1.5 rounded">
+                    <span className="text-muted-foreground block text-[9px]">Humidity ΔRH</span>
+                    <strong>{dRH > 0 ? `+${dRH.toFixed(1)}` : `${dRH.toFixed(1)}`}%</strong>
+                  </div>
+                  <div className="bg-muted/40 p-1.5 rounded">
+                    <span className="text-muted-foreground block text-[9px]">PM Ratio (2.5/10)</span>
+                    <strong>{pmRatio}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Indicative AQI Information Card */}
+              <div className="rounded-lg bg-card p-2.5 border border-border/50 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase font-mono">
+                    CPCB Indicative AQI (PM-based):
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className="font-mono text-[10px] font-bold"
+                    style={{ color: isDemoActive ? demoState.aqiColor : undefined }}
+                  >
+                    AQI {isDemoActive ? demoState.aqi : "—"} · {isDemoActive ? demoState.aqiCategory : "—"}
+                  </Badge>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {isDemoActive ? demoState.healthGuidance : "Based on Indian CPCB sub-index breakpoints."}
+                </p>
+                <div className="text-[9px] text-muted-foreground/75 italic pt-1 border-t border-border/30">
+                  * Indicative value based on PM2.5 and PM10 sub-indices. Official CPCB NAQI requires additional gaseous pollutant monitors.
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

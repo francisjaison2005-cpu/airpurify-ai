@@ -420,12 +420,12 @@ export const api = {
     pm2_5?: number | null;
     pm10?: number | null;
     is_manual_entry?: boolean;
-    location_id?: string;
+    location_id?: string | null;
     latitude?: number | null;
     longitude?: number | null;
     location_name?: string | null;
     gps_accuracy_m?: number | null;
-    data_source?: string;
+    data_source?: string | null;
     weather_provider?: string | null;
     observation_timestamp?: string;
   }) =>

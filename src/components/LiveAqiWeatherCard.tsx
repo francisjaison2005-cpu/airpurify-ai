@@ -122,7 +122,12 @@ export function LiveAqiWeatherCard({
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
           {reading ? (
             <>
-              {isStale ? (
+              {reading.data_source === "demo" ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 font-medium text-amber-400">
+                  <span className="size-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  SIMULATED SENSOR DATA — PHASE 2 REVIEW
+                </span>
+              ) : isStale ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 font-medium text-amber-500">
                   <AlertTriangle className="size-3" />
                   Stale Data ({ageMinutes > 120 ? `${Math.floor(ageMinutes / 60)} hrs` : `${ageMinutes} mins`} ago)
@@ -138,7 +143,7 @@ export function LiveAqiWeatherCard({
                 variant="secondary"
                 className="text-[10px] font-mono uppercase tracking-wider"
               >
-                Source: {reading.data_source === "sensor" ? "ESP32 + PMS7003" : reading.data_source}
+                Source: {reading.data_source === "demo" ? "DEMO SENSOR" : (reading.data_source === "sensor" ? "ESP32 + PMS7003" : reading.data_source)}
               </Badge>
 
               {reading.device_id && (
@@ -201,8 +206,8 @@ export function LiveAqiWeatherCard({
                     </span>
                     <div>
                       {aqiScore && <AqiBadge aqi={aqiScore} />}
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        CPCB Indicative AQI
+                      <p className="text-[10px] text-muted-foreground mt-1 font-medium">
+                        CPCB Indicative AQI (PM-based)
                       </p>
                     </div>
                   </div>
@@ -212,6 +217,9 @@ export function LiveAqiWeatherCard({
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
                     {reading.health_guidance || "Minimal impact. Clean air posing negligible health risk."}
+                  </p>
+                  <p className="text-[9px] text-muted-foreground/75 italic mt-1 border-t border-border/30 pt-1">
+                    * Indicative sub-index from PM2.5/PM10. Full official CPCB NAQI requires gaseous monitors (NO2, SO2, CO, O3).
                   </p>
                 </div>
 
