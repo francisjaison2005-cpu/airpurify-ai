@@ -165,7 +165,7 @@ export function ClassifierSimulatorView({
   const absDRH = Math.abs(dRH);
   const pmRatio = activePm10 > 0 ? (activePm2_5 / activePm10).toFixed(2) : "—";
 
-  // Toggle handler for "Duplicate Location / Demo Sensor"
+  // Toggle handler for "Location / Sensor"
   const handleToggleDemoSensor = () => {
     if (isDemoActive) {
       demoActions.toggleEnvironment();
@@ -277,7 +277,7 @@ export function ClassifierSimulatorView({
         </CardContent>
       </Card>
 
-      {/* SECTION 1: DUPLICATE LOCATION / DEMO SENSOR TOGGLE
+      {/* SECTION 1: LOCATION / SENSOR TOGGLE
           Placed IMMEDIATELY ABOVE the two existing panels:
           - Local Micro-Climate (Test Room / Node)
           - Outdoor Baseline Weather (Ambient Ground Reference)

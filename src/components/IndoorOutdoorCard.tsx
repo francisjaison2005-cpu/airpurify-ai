@@ -345,7 +345,7 @@ export function IndoorOutdoorCard({
             </span>
           </div>
           <span className="font-mono text-[10px] text-amber-300 font-semibold">
-            Mode: {isDemoOutdoor ? "ON — Outdoor Demo" : "OFF — Indoor Demo"}
+            Mode: {isDemoOutdoor ? "ON" : "OFF"}
           </span>
         </div>
       )}
