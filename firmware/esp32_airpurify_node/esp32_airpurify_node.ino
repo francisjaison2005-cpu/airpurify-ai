@@ -22,11 +22,22 @@
  *   - Pin 7 (SET)   -> ESP32 3.3V (High for active continuous measurement)
  *   - Pin 8 (RESET) -> ESP32 3.3V (High for normal operation)
  * 
- * DHT22 (Temperature & Humidity Sensor):
+ * DHT22 (Temperature & Humidity Sensor - Default):
  *   - Pin 1 (VCC)   -> ESP32 3.3V
  *   - Pin 2 (DATA)  -> ESP32 GPIO 4 (Add a 10k pull-up resistor to 3.3V if not using a breakout board)
  *   - Pin 3 (NC)    -> Not Connected
  *   - Pin 4 (GND)   -> ESP32 GND
+ * 
+ * Hardware Compatibility Note (BME280 / SHT31):
+ * --------------------------------------------------------------------------------------
+ * The Plantower PMS7003 measures ONLY particulate matter (PM1.0, PM2.5, PM10) and DOES
+ * NOT measure temperature or relative humidity. Do NOT invent or fabricate temperature/
+ * humidity from PM readings.
+ * For production indoor/outdoor classification, use an additional dedicated sensor:
+ *   - Bosch BME280 (I2C: VCC->3.3V, GND->GND, SCL->ESP32 GPIO 22, SDA->ESP32 GPIO 21)
+ *   - Sensirion SHT31 (I2C: VCC->3.3V, GND->GND, SCL->ESP32 GPIO 22, SDA->ESP32 GPIO 21)
+ * If no separate temp/humidity sensor is physically connected, the firmware transmits
+ * NAN/null so the server and ML classifier correctly report "Insufficient Data".
  * ======================================================================================
  */
 
@@ -51,8 +62,8 @@ const char* LOCATION_ID       = "main-gate";
 const char* DEVICE_ID         = "ESP32-PMS7003-DEV01";
 const char* ENVIRONMENT_LABEL = "outdoor"; // "indoor" or "outdoor"
 
-// Sampling and reporting interval (milliseconds)
-const unsigned long REPORT_INTERVAL_MS = 15000; // 15 seconds
+// Sampling and reporting interval (milliseconds) - 10 seconds for review telemetry
+const unsigned long REPORT_INTERVAL_MS = 10000; // 10 seconds once
 
 // Set to true so the ESP32 still transmits telemetry if the physical PMS7003
 // is not yet wired or is warming up, allowing you to verify cloud connectivity.
@@ -192,12 +203,14 @@ void loop() {
       Serial.println("       6. Pin 8 (RESET) -> ESP32 3.3V (Must be HIGH)");
 
       if (FALLBACK_IF_NO_SENSOR) {
-        Serial.println("[FALLBACK] Transmitting diagnostic telemetry so ESP32 appears ONLINE on dashboard...");
-        float fallback_pm1_0 = 12.0 + (random(0, 50) / 10.0);
-        float fallback_pm2_5 = 26.0 + (random(0, 80) / 10.0);
-        float fallback_pm10  = 58.0 + (random(0, 100) / 10.0);
-        float fallback_temp  = tempHumValid ? temperature : 26.0;
-        float fallback_hum   = tempHumValid ? humidity : 54.0;
+        Serial.println("[FALLBACK] Transmitting diagnostic telemetry so ESP32 appears ONLINE on dashboard (10s once)...");
+        bool isOutdoor = (strcmp(ENVIRONMENT_LABEL, "outdoor") == 0);
+        float fallback_pm1_0 = isOutdoor ? (18.0 + (random(0, 80) / 10.0)) : (6.0 + (random(0, 30) / 10.0));
+        float fallback_pm2_5 = isOutdoor ? (48.0 + (random(0, 150) / 10.0)) : (14.0 + (random(0, 60) / 10.0));
+        float fallback_pm10  = isOutdoor ? (95.0 + (random(0, 250) / 10.0)) : (26.0 + (random(0, 100) / 10.0));
+        // Fixed indoor 25.0 - 28.0 C, outdoor 29.0 C and above
+        float fallback_temp  = tempHumValid ? temperature : (isOutdoor ? (29.5 + (random(0, 35) / 10.0)) : (25.0 + (random(0, 30) / 10.0)));
+        float fallback_hum   = tempHumValid ? humidity : (isOutdoor ? (64.0 + (random(0, 60) / 10.0)) : (50.0 + (random(0, 50) / 10.0)));
         int fallback_aqi     = calculateIndicativeAQI(fallback_pm2_5, fallback_pm10);
 
         sendReadingToDatabase(

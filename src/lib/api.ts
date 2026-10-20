@@ -160,11 +160,17 @@ export interface DeviceLocationResult {
 }
 
 export interface IndoorOutdoorResult {
-  predicted_class: "Indoor" | "Outdoor" | "Unknown";
-  prediction_timestamp: string;
-  model_version: string;
-  model_status: "trained" | "model_not_configured";
+  predicted_class: "indoor" | "outdoor" | "Indoor" | "Outdoor" | "Insufficient Data" | "Unknown";
+  class_probabilities?: Record<string, number> | null;
   confidence_score?: number | null;
+  temperature_difference?: number | null;
+  humidity_difference?: number | null;
+  model_name?: string;
+  model_version: string;
+  model_status: "trained" | "model_not_configured" | "insufficient_data" | "error";
+  dataset_provenance?: "synthetic" | string;
+  uncalibrated_probability_note?: string;
+  prediction_timestamp: string;
   input_feature_availability: Record<string, boolean>;
   feature_importance?: Record<string, number> | null;
   notes: string;
@@ -397,21 +403,31 @@ export const api = {
   getDeviceLocation: () => request<DeviceLocationResult>("/analysis/device-location"),
 
   predictIndoorOutdoor: (data: {
-    temperature: number;
-    humidity: number;
-    pm1_0: number;
-    pm2_5: number;
-    pm10: number;
-    temporal_hour?: number | undefined;
-    is_manual_entry?: boolean | undefined;
-    location_id?: string | undefined;
-    latitude?: number | null | undefined;
-    longitude?: number | null | undefined;
-    location_name?: string | null | undefined;
-    gps_accuracy_m?: number | null | undefined;
-    data_source?: string | undefined;
-    weather_provider?: string | null | undefined;
-    observation_timestamp?: string | undefined;
+    temperature_c?: number | null;
+    temperature?: number | null;
+    humidity_pct?: number | null;
+    humidity?: number | null;
+    outdoor_reference_temperature_c?: number | null;
+    outdoor_temperature?: number | null;
+    outdoor_reference_humidity_pct?: number | null;
+    outdoor_humidity?: number | null;
+    temperature_delta_c?: number | null;
+    humidity_delta_pct?: number | null;
+    hour_of_day?: number | null;
+    temporal_hour?: number | null;
+    season?: "summer" | "monsoon" | "winter" | string | null;
+    pm1_0?: number | null;
+    pm2_5?: number | null;
+    pm10?: number | null;
+    is_manual_entry?: boolean;
+    location_id?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    location_name?: string | null;
+    gps_accuracy_m?: number | null;
+    data_source?: string;
+    weather_provider?: string | null;
+    observation_timestamp?: string;
   }) =>
     request<IndoorOutdoorResult>("/analysis/indoor-outdoor", {
       method: "POST",

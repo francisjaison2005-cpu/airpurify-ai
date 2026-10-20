@@ -1,0 +1,50 @@
+{
+  "model_name": "indoor_outdoor_rf",
+  "algorithm": "RandomForestClassifier",
+  "model_version": "rf-synthetic-v1.0",
+  "training_timestamp": "2026-10-20T13:56:34.914947+00:00",
+  "dataset_filename": "indoor_outdoor_synthetic_dataset.csv",
+  "dataset_type": "synthetic",
+  "target_labels": [
+    "indoor",
+    "outdoor"
+  ],
+  "scikit_learn_version": "1.9.0",
+  "hyperparameters": {
+    "n_estimators": 300,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 2,
+    "class_weight": "balanced",
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "feature_schema": {
+    "numeric_features": [
+      "temperature_c",
+      "humidity_pct",
+      "outdoor_reference_temperature_c",
+      "outdoor_reference_humidity_pct",
+      "temperature_delta_c",
+      "humidity_delta_pct",
+      "hour_of_day"
+    ],
+    "categorical_features": [
+      "season"
+    ],
+    "transformed_features": [
+      "num__temperature_c",
+      "num__humidity_pct",
+      "num__outdoor_reference_temperature_c",
+      "num__outdoor_reference_humidity_pct",
+      "num__temperature_delta_c",
+      "num__humidity_delta_pct",
+      "num__hour_of_day",
+      "cat__season_monsoon",
+      "cat__season_summer",
+      "cat__season_winter"
+    ]
+  },
+  "evaluation_limitations": "Model was trained strictly on synthetically generated microclimate data. Metrics reflect synthetic distribution behavior and must NOT be interpreted as validated real-world accuracy. Real sensor noise, building thermal inertia, and varying outdoor micro-climates require validation against calibrated physical sensors.",
+  "hardware_compatibility_note": "Plantower PMS7003 measures particulate matter only. Local temperature and humidity measurements require additional calibrated sensors such as Bosch BME280 or Sensirion SHT31. Outdoor weather API conditions must not be used as indoor sensor readings."
+}

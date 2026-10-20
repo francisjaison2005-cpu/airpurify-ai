@@ -1,4 +1,4 @@
-﻿from typing import Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 
 from ..dependencies import get_database
@@ -48,12 +48,22 @@ def predict_indoor_outdoor_endpoint(req: IndoorOutdoorPredictRequest, db=Depends
     Persists evaluation request to classification_results collection.
     """
     result = predict_indoor_outdoor(
+        temperature_c=req.temperature_c,
         temperature=req.temperature,
+        humidity_pct=req.humidity_pct,
         humidity=req.humidity,
+        outdoor_reference_temperature_c=req.outdoor_reference_temperature_c,
+        outdoor_temperature=req.outdoor_temperature,
+        outdoor_reference_humidity_pct=req.outdoor_reference_humidity_pct,
+        outdoor_humidity=req.outdoor_humidity,
+        temperature_delta_c=req.temperature_delta_c,
+        humidity_delta_pct=req.humidity_delta_pct,
+        hour_of_day=req.hour_of_day,
+        temporal_hour=req.temporal_hour,
+        season=req.season,
         pm1_0=req.pm1_0,
         pm2_5=req.pm2_5,
         pm10=req.pm10,
-        temporal_hour=req.temporal_hour,
         is_manual_entry=req.is_manual_entry,
         location_id=req.location_id,
         latitude=req.latitude,

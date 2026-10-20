@@ -65,32 +65,40 @@ export function IndoorOutdoorCard({
     setEvaluating(true);
     setEvalError(null);
 
-    // 1. Evaluate Supervised ML Model on live IoT sensor readings
-    if (
-      reading?.temperature != null &&
-      reading?.humidity != null &&
-      reading?.pm2_5 != null &&
-      reading?.pm10 != null
-    ) {
-      try {
-        const ml = await api.predictIndoorOutdoor({
-          temperature: reading.temperature,
-          humidity: reading.humidity,
-          pm1_0: reading.pm1_0 ?? reading.pm2_5 * 0.45,
-          pm2_5: reading.pm2_5,
-          pm10: reading.pm10,
-          temporal_hour: new Date(reading.timestamp || Date.now()).getHours(),
-          is_manual_entry: reading.data_source !== "sensor",
-          location_id: reading.location_id,
-          location_name: placeName ?? reading.location_name,
-          latitude: latitude ?? null,
-          longitude: longitude ?? null,
-          data_source: reading.data_source,
-        });
-        setMlResult(ml);
-      } catch (mlErr) {
-        console.warn("Live ML classifier evaluation failed:", mlErr);
-      }
+    // 1. Evaluate Supervised Random Forest ML Model on live IoT sensor readings
+    try {
+      const ml = await api.predictIndoorOutdoor({
+        temperature_c: reading?.temperature ?? null,
+        temperature: reading?.temperature ?? null,
+        humidity_pct: reading?.humidity ?? null,
+        humidity: reading?.humidity ?? null,
+        outdoor_reference_temperature_c: weatherData?.temperature ?? null,
+        outdoor_temperature: weatherData?.temperature ?? null,
+        outdoor_reference_humidity_pct: weatherData?.humidity ?? null,
+        outdoor_humidity: weatherData?.humidity ?? null,
+        temperature_delta_c:
+          reading?.temperature != null && weatherData?.temperature != null
+            ? Math.round((reading.temperature - weatherData.temperature) * 100) / 100
+            : null,
+        humidity_delta_pct:
+          reading?.humidity != null && weatherData?.humidity != null
+            ? Math.round((reading.humidity - weatherData.humidity) * 100) / 100
+            : null,
+        pm1_0: reading?.pm1_0 ?? null,
+        pm2_5: reading?.pm2_5 ?? null,
+        pm10: reading?.pm10 ?? null,
+        hour_of_day: new Date(reading?.timestamp || Date.now()).getHours(),
+        temporal_hour: new Date(reading?.timestamp || Date.now()).getHours(),
+        is_manual_entry: reading ? reading.data_source !== "sensor" : true,
+        location_id: reading?.location_id,
+        location_name: placeName ?? reading?.location_name,
+        latitude: latitude ?? null,
+        longitude: longitude ?? null,
+        data_source: reading?.data_source,
+      });
+      setMlResult(ml);
+    } catch (mlErr) {
+      console.warn("Live ML classifier evaluation failed:", mlErr);
     }
 
     try {
@@ -366,55 +374,106 @@ export function IndoorOutdoorCard({
 
       <CardContent className="space-y-4">
         {/* Pipeline 1: Supervised ML Model (Trained Random Forest Classifier) */}
-        {mlResult && mlResult.model_status === "trained" && (
-          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 transition-all">
+        {mlResult && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 transition-all space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex size-11 items-center justify-center rounded-xl bg-card border border-border shadow-xs text-primary">
+                <div className="flex size-11 items-center justify-center rounded-xl bg-card border border-border shadow-xs text-primary shrink-0">
                   <BrainCircuit className="size-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase ${
-                        mlResult.predicted_class === "Indoor"
+                        mlResult.predicted_class?.toLowerCase() === "indoor"
                           ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
-                          : "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                          : mlResult.predicted_class?.toLowerCase() === "outdoor"
+                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                            : "bg-amber-500/15 text-amber-400 border-amber-500/30"
                       }`}
                     >
-                      {mlResult.predicted_class === "Indoor" ? (
+                      {mlResult.predicted_class?.toLowerCase() === "indoor" ? (
                         <Building className="size-3" />
-                      ) : (
+                      ) : mlResult.predicted_class?.toLowerCase() === "outdoor" ? (
                         <TreePine className="size-3" />
+                      ) : (
+                        <AlertTriangle className="size-3" />
                       )}
-                      Pipeline 1 · ML Model: {mlResult.predicted_class}
+                      ML Prediction: {mlResult.predicted_class?.toLowerCase() === "indoor" ? "Indoor" : mlResult.predicted_class?.toLowerCase() === "outdoor" ? "Outdoor" : "Insufficient Data"}
                     </span>
-                    {mlResult.confidence_score != null && (
-                      <span className="text-[11px] font-mono text-muted-foreground">
-                        ({(mlResult.confidence_score * 100).toFixed(1)}% confidence)
-                      </span>
-                    )}
+
+                    {/* Model Status Badge */}
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] font-mono uppercase tracking-wider ${
+                        mlResult.model_status === "trained"
+                          ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                          : mlResult.model_status === "insufficient_data"
+                            ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                            : mlResult.model_status === "model_not_configured"
+                              ? "bg-muted text-muted-foreground border-border"
+                              : "bg-red-500/15 text-red-400 border-red-500/30"
+                      }`}
+                    >
+                      Status: {mlResult.model_status === "trained" ? "Trained" : mlResult.model_status === "insufficient_data" ? "Insufficient Data" : mlResult.model_status === "model_not_configured" ? "Not Configured" : "Error"}
+                    </Badge>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Supervised Random Forest evaluated on live IoT sensor telemetry (PM10: {reading?.pm10}, PM2.5: {reading?.pm2_5}, Temp: {reading?.temperature}°C, RH: {reading?.humidity}%)
-                  </p>
+
+                  {/* Probabilities and Deltas */}
+                  {mlResult.model_status === "trained" && (
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      {mlResult.class_probabilities ? (
+                        <span className="font-mono text-foreground font-medium">
+                          Estimated Probabilities:{" "}
+                          <span className="text-blue-400">Indoor {(mlResult.class_probabilities.indoor * 100).toFixed(1)}%</span>
+                          {" · "}
+                          <span className="text-emerald-400">Outdoor {(mlResult.class_probabilities.outdoor * 100).toFixed(1)}%</span>
+                          <span className="text-[10px] text-muted-foreground ml-1 font-sans">(uncalibrated estimate)</span>
+                        </span>
+                      ) : mlResult.confidence_score != null ? (
+                        <span className="font-mono text-muted-foreground">
+                          ({(mlResult.confidence_score * 100).toFixed(1)}% uncalibrated estimate)
+                        </span>
+                      ) : null}
+
+                      {(mlResult.temperature_difference != null || mlResult.humidity_difference != null) && (
+                        <span className="text-[11px] font-mono text-muted-foreground">
+                          (ΔT: {mlResult.temperature_difference !== null && mlResult.temperature_difference !== undefined ? `${mlResult.temperature_difference > 0 ? "+" : ""}${mlResult.temperature_difference.toFixed(1)}°C` : "—"} · ΔRH: {mlResult.humidity_difference !== null && mlResult.humidity_difference !== undefined ? `${mlResult.humidity_difference > 0 ? "+" : ""}${mlResult.humidity_difference.toFixed(1)}%` : "—"})
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {mlResult.model_status === "insufficient_data" && (
+                    <p className="mt-1 text-xs text-amber-400/90 leading-tight">
+                      Local temperature/humidity or outdoor weather reference is unavailable. The PMS7003 sensor measures PM only; an additional BME280/SHT31 sensor is required for local climate telemetry.
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="text-[10px] text-muted-foreground sm:text-right shrink-0">
-                <p>Model Architecture: <span className="font-mono text-foreground font-semibold">Random Forest v1.0</span></p>
-                <p>Training Grounding: <span className="text-foreground">Figshare South Asia + Chennai</span></p>
+                <p>Model: <span className="font-mono text-foreground font-semibold">{mlResult.model_name || "Random Forest"} ({mlResult.model_version})</span></p>
+                <p>Dataset: <span className="font-mono text-foreground font-semibold">{mlResult.dataset_provenance || "synthetic"}</span></p>
               </div>
             </div>
 
+            {/* Mandatory Visible Synthetic Experimental Note */}
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-400 flex items-start gap-2">
+              <Info className="size-3.5 shrink-0 mt-0.5 text-amber-400" />
+              <p className="leading-relaxed">
+                <strong>Experimental prediction trained on synthetic data.</strong> Indoor/outdoor classification requires validation with real sensor measurements.
+              </p>
+            </div>
+
             {mlResult.feature_importance && (
-              <div className="mt-3 pt-2.5 border-t border-border/40 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
                 <span className="font-semibold text-foreground flex items-center gap-1">
                   <Sparkles className="size-3 text-primary" /> Feature Contributions:
                 </span>
-                {Object.entries(mlResult.feature_importance).map(([k, v]) => (
+                {Object.entries(mlResult.feature_importance).slice(0, 5).map(([k, v]) => (
                   <span key={k} className="rounded bg-muted/60 px-1.5 py-0.5 font-mono">
-                    {k}: {(v * 100).toFixed(0)}%
+                    {k.replace("num__", "").replace("cat__", "")}: {(v * 100).toFixed(0)}%
                   </span>
                 ))}
               </div>

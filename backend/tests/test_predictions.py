@@ -42,8 +42,8 @@ def test_analysis_indoor_outdoor_endpoint(client, mock_db):
     res = client.post("/api/analysis/indoor-outdoor", json=payload)
     assert res.status_code == 200
     data = res.json()
-    assert data["model_status"] in ("model_not_configured", "trained")
-    assert "temperature" in data["input_feature_availability"]
+    assert data["model_status"] in ("model_not_configured", "trained", "insufficient_data")
+    assert "temperature_c" in data["input_feature_availability"]
     assert data["input_feature_availability"]["pm2_5"] is True
 
     # Verify persisted to classification_results

@@ -6,22 +6,53 @@ import numpy as np
 
 from ..config import settings
 
+import json
+import logging
+import pandas as pd
+
+logger = logging.getLogger("indoor_outdoor_service")
+
 #
 # In-memory cached model
 _cached_classifier = None
-_model_version = "v1.0-untrained"
+_model_version = "rf-synthetic-v1.0"
+_model_name = "RandomForestClassifier"
+_model_metadata = {}
 
 
-def load_classifier():
-    """Attempts to load a trained scikit-learn or joblib pipeline if available on disk."""
-    global _cached_classifier, _model_version
-    path = settings.CLASSIFIER_MODEL_PATH
-    if os.path.exists(path):
+def load_classifier(force: bool = False):
+    """Attempts to load trained scikit-learn pipeline and metadata if available on disk."""
+    global _cached_classifier, _model_version, _model_name, _model_metadata
+    if _cached_classifier is not None and not force and hasattr(_cached_classifier, "named_steps"):
+        return _cached_classifier
+
+    candidates = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "indoor_outdoor_rf.joblib"),
+        settings.CLASSIFIER_MODEL_PATH,
+        os.path.join(os.path.dirname(__file__), "ml_artifacts", "indoor_outdoor_clf.joblib"),
+    ]
+    target_path = None
+    for p in candidates:
+        if p and os.path.exists(p):
+            target_path = p
+            break
+
+    if target_path:
         try:
-            _cached_classifier = joblib.load(path)
-            _model_version = "v1.0-trained"
+            loaded_obj = joblib.load(target_path)
+            _cached_classifier = loaded_obj
+            meta_path = os.path.join(os.path.dirname(target_path), "indoor_outdoor_metadata.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    _model_metadata = json.load(f)
+                    _model_version = _model_metadata.get("model_version", "rf-synthetic-v1.0")
+                    _model_name = _model_metadata.get("algorithm", "RandomForestClassifier")
+            else:
+                _model_version = "rf-synthetic-v1.0"
+                _model_name = "RandomForestClassifier"
             return _cached_classifier
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error loading classifier from {target_path}: {e}")
             _cached_classifier = None
     return None
 
@@ -248,12 +279,22 @@ def evaluate_indoor_outdoor_heuristic(
 
 
 def predict_indoor_outdoor(
+    temperature_c: Optional[float] = None,
     temperature: Optional[float] = None,
+    humidity_pct: Optional[float] = None,
     humidity: Optional[float] = None,
+    outdoor_reference_temperature_c: Optional[float] = None,
+    outdoor_temperature: Optional[float] = None,
+    outdoor_reference_humidity_pct: Optional[float] = None,
+    outdoor_humidity: Optional[float] = None,
+    temperature_delta_c: Optional[float] = None,
+    humidity_delta_pct: Optional[float] = None,
+    hour_of_day: Optional[int] = None,
+    temporal_hour: Optional[int] = None,
+    season: Optional[str] = None,
     pm1_0: Optional[float] = None,
     pm2_5: Optional[float] = None,
     pm10: Optional[float] = None,
-    temporal_hour: Optional[int] = None,
     is_manual_entry: bool = True,
     location_id: Optional[str] = None,
     latitude: Optional[float] = None,
@@ -265,22 +306,79 @@ def predict_indoor_outdoor(
     observation_timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Evaluates environmental features for indoor vs outdoor classification.
-    Adheres strictly to scientific requirements:
-    - If no trained model is loaded, returns `model_status: 'model_not_configured'`.
-    - Does NOT invent synthetic confidence scores or fabricate classifications.
-    - Accurately tracks input feature availability and provenance (sensor, weather_api, manual).
-    - Highlights scientific reality: Temperature and humidity alone cannot reliably distinguish
-      indoor from outdoor environments due to overlapping micro-climates.
+    Evaluates environmental features for indoor vs outdoor classification using the trained
+    Random Forest pipeline (fitted on temperature, humidity, outdoor reference readings, deltas, hour, and season).
+
+    Scientific & Hardware Constraints:
+    - Never fabricates temperature or humidity from PMS7003 readings (PMS7003 measures PM only).
+    - If local temp/humidity or outdoor reference values are missing, returns 'Insufficient Data' with status 'insufficient_data'.
+    - If model artifact is not configured or missing, returns explicit 'model_not_configured' status.
+    - Model probabilities are explicitly documented as uncalibrated model estimates from synthetic training data.
+    - Identifies dataset provenance as 'synthetic' with clear experimental disclaimers.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
+    ts = observation_timestamp or now_iso
+
+    # Resolve parameter aliases
+    local_temp = temperature_c if temperature_c is not None else temperature
+    local_hum = humidity_pct if humidity_pct is not None else humidity
+    outdoor_temp = outdoor_reference_temperature_c if outdoor_reference_temperature_c is not None else outdoor_temperature
+    outdoor_hum = outdoor_reference_humidity_pct if outdoor_reference_humidity_pct is not None else outdoor_humidity
+    hour = hour_of_day if hour_of_day is not None else (temporal_hour if temporal_hour is not None else datetime.now(timezone.utc).hour)
+
+    # Determine season if not provided
+    season_val = season.lower() if season else None
+    if season_val not in ("summer", "monsoon", "winter"):
+        month = datetime.now(timezone.utc).month
+        if observation_timestamp:
+            try:
+                month = datetime.fromisoformat(observation_timestamp.replace("Z", "+00:00")).month
+            except Exception:
+                pass
+        if month in (3, 4, 5, 6):
+            season_val = "summer"
+        elif month in (7, 8, 9, 10):
+            season_val = "monsoon"
+        else:
+            season_val = "winter"
+
+    # If outdoor reference readings not provided directly, but GPS coordinates are present,
+    # attempt outdoor meteorological retrieval from Open-Meteo.
+    # (Note: Weather API readings are strictly outdoor references, never local sensor measurements)
+    if (outdoor_temp is None or outdoor_hum is None) and latitude is not None and longitude is not None:
+        try:
+            from .weather import get_ambient_weather
+            w_res = get_ambient_weather(latitude, longitude)
+            if outdoor_temp is None and w_res.get("temperature") is not None:
+                outdoor_temp = w_res["temperature"]
+            if outdoor_hum is None and w_res.get("humidity") is not None:
+                outdoor_hum = w_res["humidity"]
+        except Exception as w_err:
+            logger.debug(f"Could not fetch outdoor baseline for coordinates ({latitude}, {longitude}): {w_err}")
+
+    # Compute differentials if both local and outdoor reference exist
+    if local_temp is not None and outdoor_temp is not None:
+        temp_delta = round(local_temp - outdoor_temp, 2) if temperature_delta_c is None else round(temperature_delta_c, 2)
+    else:
+        temp_delta = round(temperature_delta_c, 2) if temperature_delta_c is not None else None
+
+    if local_hum is not None and outdoor_hum is not None:
+        hum_delta = round(local_hum - outdoor_hum, 2) if humidity_delta_pct is None else round(humidity_delta_pct, 2)
+    else:
+        hum_delta = round(humidity_delta_pct, 2) if humidity_delta_pct is not None else None
+
     feature_availability = {
-        "temperature": temperature is not None,
-        "humidity": humidity is not None,
+        "temperature_c": local_temp is not None,
+        "humidity_pct": local_hum is not None,
+        "outdoor_reference_temperature_c": outdoor_temp is not None,
+        "outdoor_reference_humidity_pct": outdoor_hum is not None,
+        "temperature_delta_c": temp_delta is not None,
+        "humidity_delta_pct": hum_delta is not None,
+        "hour_of_day": hour is not None,
+        "season": season_val is not None,
         "pm1_0": pm1_0 is not None,
         "pm2_5": pm2_5 is not None,
         "pm10": pm10 is not None,
-        "temporal_hour": temporal_hour is not None,
         "location": (latitude is not None and longitude is not None),
     }
 
@@ -291,7 +389,7 @@ def predict_indoor_outdoor(
         "gps_accuracy_m": gps_accuracy_m,
         "location_id": location_id,
         "weather_provider": weather_provider,
-        "observation_timestamp": observation_timestamp or now_iso,
+        "observation_timestamp": ts,
     }
 
     ratio_heuristic = "Indeterminate"
@@ -315,30 +413,37 @@ def predict_indoor_outdoor(
     }
 
     scientific_disclaimer = (
-        "Prediction unavailable â€” a validated indoor/outdoor model is not configured. "
-        "Temperature and relative humidity alone cannot reliably distinguish indoor from outdoor "
-        "environments because ambient and indoor ranges frequently overlap (e.g., HVAC conditioned "
-        "rooms vs temperate weather). Plantower PMS7003 sensors measure particulate matter only; "
-        "ambient weather values reflect outdoor assimilation at geographical coordinates, not indoor "
-        "room micro-climates. A scientifically honest classification requires trained multi-sensor "
-        "differential models calibrated against ground-truth indoor/outdoor labels."
+        "Experimental prediction trained on synthetic data. "
+        "Indoor/outdoor classification requires validation with real sensor measurements."
+    )
+    uncalibrated_note = (
+        "Model probabilities are uncalibrated model estimates from synthetic training data, "
+        "not guaranteed confidence or real-world reliability."
     )
 
     clf = _cached_classifier or load_classifier()
+    if clf is not None and not hasattr(clf, "named_steps"):
+        clf = load_classifier(force=True)
 
+    # Case 1: Model artifact is missing
     if clf is None:
         return {
             "predicted_class": "Unknown",
-            "prediction_timestamp": now_iso,
-            "model_version": "untrained-placeholder",
-            "model_status": "model_not_configured",
+            "class_probabilities": None,
             "confidence_score": None,
+            "temperature_difference": temp_delta,
+            "humidity_difference": hum_delta,
+            "model_name": _model_name,
+            "model_version": "none",
+            "model_status": "model_not_configured",
+            "dataset_provenance": "synthetic",
+            "uncalibrated_probability_note": uncalibrated_note,
+            "prediction_timestamp": ts,
             "input_feature_availability": feature_availability,
             "feature_importance": None,
             "notes": (
-                "Prediction unavailable â€” a validated indoor/outdoor model is not configured. "
-                "The supervised training pipeline is available via train_classifier_pipeline(). "
-                "Labelled sensor observations are required to train and evaluate the classifier."
+                "Prediction unavailable — Indoor/Outdoor Random Forest model is not configured. "
+                "The training script is available at backend/scripts/train_indoor_outdoor.py."
             ),
             "data_source": data_source,
             "location_context": location_context,
@@ -346,42 +451,123 @@ def predict_indoor_outdoor(
             "scientific_disclaimer": scientific_disclaimer,
         }
 
-    # If model is loaded, run real inference
-    try:
-        hour = temporal_hour if temporal_hour is not None else datetime.now(timezone.utc).hour
-        features = np.array([[temperature, humidity, pm1_0, pm2_5, pm10, hour]])
-        pred = clf.predict(features)[0]
-        prob = None
-        if hasattr(clf, "predict_proba"):
-            probs = clf.predict_proba(features)[0]
-            prob = float(np.max(probs))
+    # Case 2: Required inputs are incomplete
+    required_features_present = (
+        local_temp is not None
+        and local_hum is not None
+        and outdoor_temp is not None
+        and outdoor_hum is not None
+    )
 
-        importance = None
-        if hasattr(clf, "feature_importances_"):
-            feature_names = ["temp", "humidity", "pm1_0", "pm2_5", "pm10", "hour"]
-            importance = {k: float(v) for k, v in zip(feature_names, clf.feature_importances_)}
+    if not required_features_present:
+        missing_reasons = []
+        if local_temp is None or local_hum is None:
+            missing_reasons.append("local temperature and relative humidity")
+        if outdoor_temp is None or outdoor_hum is None:
+            missing_reasons.append("outdoor reference temperature and relative humidity")
 
+        missing_text = " and ".join(missing_reasons)
         return {
-            "predicted_class": str(pred).capitalize(),
-            "prediction_timestamp": now_iso,
+            "predicted_class": "Insufficient Data",
+            "class_probabilities": None,
+            "confidence_score": None,
+            "temperature_difference": temp_delta,
+            "humidity_difference": hum_delta,
+            "model_name": _model_name,
             "model_version": _model_version,
-            "model_status": "trained",
-            "confidence_score": round(prob, 3) if prob is not None else None,
+            "model_status": "insufficient_data",
+            "dataset_provenance": "synthetic",
+            "uncalibrated_probability_note": uncalibrated_note,
+            "prediction_timestamp": ts,
             "input_feature_availability": feature_availability,
-            "feature_importance": importance,
-            "notes": f"Predicted using trained classifier {_model_version} on validated input features.",
+            "feature_importance": None,
+            "notes": (
+                f"Prediction unavailable — Insufficient Data ({missing_text} missing). "
+                "The Plantower PMS7003 sensor measures particulate matter only and does not measure temperature or humidity. "
+                "A physical BME280 or SHT31 sensor is required for local telemetry, and outdoor baseline weather must be available."
+            ),
             "data_source": data_source,
             "location_context": location_context,
             "heuristic_evaluation": heuristic_info,
-            "scientific_disclaimer": None,
+            "scientific_disclaimer": scientific_disclaimer,
+        }
+
+    # Case 3: Run real inference using the trained Pipeline
+    try:
+        input_data = pd.DataFrame([{
+            "temperature_c": float(local_temp),
+            "humidity_pct": float(local_hum),
+            "outdoor_reference_temperature_c": float(outdoor_temp),
+            "outdoor_reference_humidity_pct": float(outdoor_hum),
+            "temperature_delta_c": float(temp_delta),
+            "humidity_delta_pct": float(hum_delta),
+            "hour_of_day": int(hour),
+            "season": str(season_val).lower(),
+        }])
+
+        pred_raw = clf.predict(input_data)[0]
+        predicted_class = str(pred_raw).lower()
+
+        class_probabilities = None
+        confidence_score = None
+        if hasattr(clf, "predict_proba"):
+            probs = clf.predict_proba(input_data)[0]
+            classes = [str(c).lower() for c in clf.classes_.tolist()]
+            class_probabilities = {c: round(float(p), 4) for c, p in zip(classes, probs)}
+            confidence_score = round(float(np.max(probs)), 4)
+
+        feature_importances = None
+        try:
+            if hasattr(clf, "named_steps") and "classifier" in clf.named_steps and "preprocessor" in clf.named_steps:
+                clf_step = clf.named_steps["classifier"]
+                prep_step = clf.named_steps["preprocessor"]
+                if hasattr(clf_step, "feature_importances_"):
+                    names = prep_step.get_feature_names_out().tolist()
+                    feature_importances = {
+                        k: round(float(v), 4)
+                        for k, v in zip(names, clf_step.feature_importances_)
+                    }
+        except Exception:
+            pass
+
+        return {
+            "predicted_class": predicted_class,
+            "class_probabilities": class_probabilities,
+            "confidence_score": confidence_score,
+            "temperature_difference": temp_delta,
+            "humidity_difference": hum_delta,
+            "model_name": _model_name,
+            "model_version": _model_version,
+            "model_status": "trained",
+            "dataset_provenance": "synthetic",
+            "uncalibrated_probability_note": uncalibrated_note,
+            "prediction_timestamp": ts,
+            "input_feature_availability": feature_availability,
+            "feature_importance": feature_importances,
+            "notes": (
+                f"Predicted as {predicted_class.upper()} using trained {_model_name} ({_model_version}). "
+                "Inputs include local & outdoor reference temperature/humidity, deltas, hour, and season. "
+                "Probabilities are uncalibrated model estimates from synthetic data."
+            ),
+            "data_source": data_source,
+            "location_context": location_context,
+            "heuristic_evaluation": heuristic_info,
+            "scientific_disclaimer": scientific_disclaimer,
         }
     except Exception as e:
+        logger.error(f"Inference error: {e}", exc_info=True)
         return {
             "predicted_class": "Unknown",
-            "prediction_timestamp": now_iso,
-            "model_version": _model_version,
-            "model_status": "model_not_configured",
+            "class_probabilities": None,
             "confidence_score": None,
+            "temperature_difference": temp_delta,
+            "humidity_difference": hum_delta,
+            "model_name": _model_name,
+            "model_version": _model_version,
+            "model_status": "error",
+            "dataset_provenance": "synthetic",
+            "uncalibrated_probability_note": uncalibrated_note,
+            "prediction_timestamp": ts,
             "input_feature_availability": feature_availability,
             "feature_importance": None,
             "notes": f"Inference execution error: {str(e)}",
@@ -390,6 +576,7 @@ def predict_indoor_outdoor(
             "heuristic_evaluation": heuristic_info,
             "scientific_disclaimer": scientific_disclaimer,
         }
+
 
 
 
@@ -438,15 +625,21 @@ def train_classifier_pipeline(dataset: List[Dict[str, Any]], save_path: Optional
     os.makedirs(os.path.dirname(target), exist_ok=True)
     joblib.dump(clf, target)
 
-    global _cached_classifier, _model_version
-    _cached_classifier = clf
-    _model_version = f"v1.0-rf-n{len(dataset)}"
+    if save_path is None or save_path == settings.CLASSIFIER_MODEL_PATH:
+        global _cached_classifier, _model_version
+        _cached_classifier = clf
+        _model_version = f"v1.0-rf-n{len(dataset)}"
 
     return {
         "status": "success",
         "model_version": _model_version,
         "saved_path": target,
-        "evaluation_metrics": metrics    }
+        "evaluation_metrics": metrics
+    }
+
+
+# Attempt initial model load
+load_classifier()
 
 
 

@@ -127,12 +127,23 @@ class ReverseGeocodeResponse(BaseModel):
 
 
 class IndoorOutdoorPredictRequest(BaseModel):
-    temperature: float = Field(..., ge=-50, le=70)
-    humidity: float = Field(..., ge=0, le=100)
-    pm1_0: float = Field(..., ge=0, le=1000)
-    pm2_5: float = Field(..., ge=0, le=1000)
-    pm10: float = Field(..., ge=0, le=1500)
+    temperature_c: Optional[float] = Field(default=None, ge=-50, le=70)
+    temperature: Optional[float] = Field(default=None, ge=-50, le=70)
+    humidity_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    humidity: Optional[float] = Field(default=None, ge=0, le=100)
+    outdoor_reference_temperature_c: Optional[float] = Field(default=None, ge=-50, le=70)
+    outdoor_temperature: Optional[float] = Field(default=None, ge=-50, le=70)
+    outdoor_reference_humidity_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    outdoor_humidity: Optional[float] = Field(default=None, ge=0, le=100)
+    temperature_delta_c: Optional[float] = None
+    humidity_delta_pct: Optional[float] = None
+    hour_of_day: Optional[int] = Field(default=None, ge=0, le=23)
     temporal_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    season: Optional[str] = Field(default=None, pattern="^(summer|monsoon|winter)$")
+    # Particulates (PMS7003 measures PM only; auxiliary context, not used for thermal RF)
+    pm1_0: Optional[float] = Field(default=None, ge=0, le=1000)
+    pm2_5: Optional[float] = Field(default=None, ge=0, le=1000)
+    pm10: Optional[float] = Field(default=None, ge=0, le=1500)
     is_manual_entry: bool = True
     location_id: Optional[str] = None
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
@@ -145,11 +156,20 @@ class IndoorOutdoorPredictRequest(BaseModel):
 
 
 class IndoorOutdoorPredictResponse(BaseModel):
-    predicted_class: str  # "Indoor", "Outdoor", "Unknown"
-    prediction_timestamp: str
-    model_version: str
-    model_status: str  # "trained", "model_not_configured"
+    predicted_class: str  # "indoor", "outdoor", "Insufficient Data", or "Unknown"
+    class_probabilities: Optional[Dict[str, float]] = None
     confidence_score: Optional[float] = None
+    temperature_difference: Optional[float] = None
+    humidity_difference: Optional[float] = None
+    model_name: str = "RandomForestClassifier"
+    model_version: str = "rf-synthetic-v1.0"
+    model_status: str  # "trained", "model_not_configured", "insufficient_data", "error"
+    dataset_provenance: str = "synthetic"
+    uncalibrated_probability_note: Optional[str] = (
+        "Model probabilities are uncalibrated model estimates from synthetic training data, "
+        "not guaranteed confidence or real-world reliability."
+    )
+    prediction_timestamp: str
     input_feature_availability: Dict[str, bool]
     feature_importance: Optional[Dict[str, float]] = None
     notes: str

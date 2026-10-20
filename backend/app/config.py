@@ -24,7 +24,7 @@ class Settings:
     )
     CLASSIFIER_MODEL_PATH: str = os.getenv(
         "CLASSIFIER_MODEL_PATH",
-        os.path.join(os.path.dirname(__file__), "ml_artifacts", "indoor_outdoor_clf.joblib"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "indoor_outdoor_rf.joblib"),
     )
     FALLBACK_TO_MOCK_DB: bool = os.getenv("FALLBACK_TO_MOCK_DB", "true").lower() in ("true", "1", "yes")
 

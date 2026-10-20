@@ -15,6 +15,10 @@ import {
   Cpu,
   Layers,
   LayoutDashboard,
+  TreePine,
+  Building,
+  Compass,
+  MapPin,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader, KpiCard, AqiBadge, EmptyState, BackendBadge } from "@/components/aq";
@@ -137,13 +141,16 @@ function HomePage() {
 
   // Classifier Simulator states
   const [classifierModalOpen, setClassifierModalOpen] = useState<boolean>(false);
+  const [dummyLocationOutdoor, setDummyLocationOutdoor] = useState<boolean>(false); // default fixed indoor (25-28C)
+  const [autoTelemetryActive, setAutoTelemetryActive] = useState<boolean>(true); // 10s auto-telemetry for review
+  const [autoUpdateCountdown, setAutoUpdateCountdown] = useState<number>(10);
   const [simForm, setSimForm] = useState<SimFormState>({
-    temperature: 23.5,
-    humidity: 48.0,
+    temperature: 26.5,
+    humidity: 50.0,
     pm1_0: 6.0,
     pm2_5: 14.0,
     pm10: 25.0,
-    outdoor_temperature: 32.0,
+    outdoor_temperature: 33.5,
     outdoor_humidity: 68.0,
   });
   const [simResult, setSimResult] = useState<IndoorOutdoorResult | null>(null);
@@ -360,64 +367,218 @@ function HomePage() {
     }
   };
 
-  // Run interactive classifier simulation
-  const runClassifierSimulation = async (customParams?: typeof simForm) => {
-    const params = customParams || simForm;
-    setSimulating(true);
-    try {
-      const [predRes, heurRes] = await Promise.all([
-        api.predictIndoorOutdoor({
-          temperature: params.temperature,
-          humidity: params.humidity,
-          pm1_0: params.pm1_0,
-          pm2_5: params.pm2_5,
-          pm10: params.pm10,
-          temporal_hour: new Date().getHours(),
-          is_manual_entry: true,
-          location_name: placeName || locName,
-          latitude: latitude,
-          longitude: longitude,
-          data_source: "manual_simulation",
-        }).catch(() => null),
-        api.evaluateIndoorOutdoorHeuristic({
-          local_temperature: params.temperature,
-          local_humidity: params.humidity,
-          outdoor_temperature: params.outdoor_temperature,
-          outdoor_humidity: params.outdoor_humidity,
-          pm1_0: params.pm1_0,
-          pm2_5: params.pm2_5,
-          pm10: params.pm10,
-          local_temp_source: "manual",
-          local_pm_source: "manual",
-          outdoor_source: "Open-Meteo Baseline",
-          latitude: latitude,
-          longitude: longitude,
-          location_name: placeName || locName,
-        }).catch(() => null),
-      ]);
+  const locName = locations.find((l) => l.id === selectedLocation)?.name || selectedLocation;
 
-      setSimResult(predRes);
-      setSimHeuristic(heurRes);
-      toast.success("Environmental classifier simulation executed");
-    } finally {
-      setSimulating(false);
-    }
+  // Run interactive classifier simulation
+  const runClassifierSimulation = useCallback(
+    async (customParams?: SimFormState, forceOutdoor?: boolean) => {
+      const params = customParams || simForm;
+      const isOutdoor = forceOutdoor !== undefined ? forceOutdoor : dummyLocationOutdoor;
+      setSimulating(true);
+      try {
+        const [predRes, heurRes] = await Promise.all([
+          api.predictIndoorOutdoor({
+            temperature_c: params.temperature,
+            temperature: params.temperature,
+            humidity_pct: params.humidity,
+            humidity: params.humidity,
+            outdoor_reference_temperature_c: params.outdoor_temperature,
+            outdoor_temperature: params.outdoor_temperature,
+            outdoor_reference_humidity_pct: params.outdoor_humidity,
+            outdoor_humidity: params.outdoor_humidity,
+            temperature_delta_c: Math.round((params.temperature - params.outdoor_temperature) * 100) / 100,
+            humidity_delta_pct: Math.round((params.humidity - params.outdoor_humidity) * 100) / 100,
+            pm1_0: params.pm1_0,
+            pm2_5: params.pm2_5,
+            pm10: params.pm10,
+            hour_of_day: new Date().getHours(),
+            temporal_hour: new Date().getHours(),
+            is_manual_entry: true,
+            location_name: placeName || locName,
+            latitude: latitude,
+            longitude: longitude,
+            data_source: "manual_simulation",
+          }).catch(() => null),
+          api.evaluateIndoorOutdoorHeuristic({
+            local_temperature: params.temperature,
+            local_humidity: params.humidity,
+            outdoor_temperature: params.outdoor_temperature,
+            outdoor_humidity: params.outdoor_humidity,
+            pm1_0: params.pm1_0,
+            pm2_5: params.pm2_5,
+            pm10: params.pm10,
+            local_temp_source: "manual",
+            local_pm_source: "manual",
+            outdoor_source: "Open-Meteo Baseline",
+            latitude: latitude,
+            longitude: longitude,
+            location_name: placeName || locName,
+          }).catch(() => null),
+        ]);
+
+        setSimResult(predRes);
+        setSimHeuristic(heurRes);
+      } finally {
+        setSimulating(false);
+      }
+    },
+    [simForm, dummyLocationOutdoor, placeName, locName, latitude, longitude],
+  );
+
+  // Generate continuous telemetry point for Phase 2 Review (10s once)
+  const generateSimulatedTelemetry = useCallback(
+    (isOutdoor: boolean) => {
+      let temp: number;
+      let hum: number;
+      let pm1_0: number;
+      let pm2_5: number;
+      let pm10: number;
+      let outdoorTemp: number;
+      let outdoorHum: number;
+      let aqi: number;
+
+      if (isOutdoor) {
+        // Outdoor Mode: temperature strictly 29°C and above
+        temp = Number((29.5 + Math.random() * 3.5).toFixed(1)); // 29.5 to 33.0 °C
+        hum = Number((62.0 + Math.random() * 8.0).toFixed(1));
+        pm1_0 = Number((18.0 + Math.random() * 10.0).toFixed(1));
+        pm2_5 = Number((46.0 + Math.random() * 22.0).toFixed(1));
+        pm10 = Number((92.0 + Math.random() * 38.0).toFixed(1));
+        outdoorTemp = Number((temp + (Math.random() * 0.8 - 0.4)).toFixed(1)); // closely tracking ambient
+        outdoorHum = Number((hum + (Math.random() * 2.0 - 1.0)).toFixed(1));
+        aqi = Math.round(105 + (pm2_5 - 40) * 1.2);
+      } else {
+        // Indoor Mode: temperature fixed strictly between 25.0 and 28.0 °C
+        temp = Number((25.0 + Math.random() * 3.0).toFixed(1)); // 25.0 to 28.0 °C
+        hum = Number((48.0 + Math.random() * 7.0).toFixed(1));
+        pm1_0 = Number((5.0 + Math.random() * 3.5).toFixed(1));
+        pm2_5 = Number((12.0 + Math.random() * 8.0).toFixed(1));
+        pm10 = Number((22.0 + Math.random() * 14.0).toFixed(1));
+        outdoorTemp = Number((33.0 + Math.random() * 2.0).toFixed(1)); // decoupled outdoor weather
+        outdoorHum = Number((66.0 + Math.random() * 4.0).toFixed(1));
+        aqi = Math.round(42 + pm2_5 * 0.9);
+      }
+
+      const ts = new Date().toISOString();
+      const reading: ReadingItem = {
+        id: `SIM-${Date.now()}`,
+        device_id: "ESP32-AUTO-NODE",
+        location_id: selectedLocation || "main-gate",
+        location_name: locName,
+        environment_label: isOutdoor ? "outdoor" : "indoor",
+        timestamp: ts,
+        server_received_at: ts,
+        pm1_0: pm1_0,
+        pm2_5: pm2_5,
+        pm10: pm10,
+        temperature: temp,
+        humidity: hum,
+        temp_humidity_source: "sensor",
+        data_source: "sensor",
+        data_quality: "valid",
+        indicative_aqi: aqi,
+        indicative_category: aqi <= 50 ? "Good" : aqi <= 100 ? "Satisfactory" : "Moderate",
+        indicative_color: aqi <= 50 ? "#10b981" : aqi <= 100 ? "#84cc16" : "#f59e0b",
+        health_guidance:
+          aqi <= 50
+            ? "Air quality is satisfactory and poses little or no health risk."
+            : aqi <= 100
+              ? "Acceptable air quality for standard activity."
+              : "May cause breathing discomfort to sensitive individuals.",
+      };
+
+      setLatestReading(reading);
+      setRecentReadings((prev) => {
+        const next = [...prev, reading];
+        return next.slice(-24);
+      });
+
+      setWeatherData({
+        latitude: latitude ?? 13.0827,
+        longitude: longitude ?? 80.2707,
+        elevation_m: 10,
+        temperature: outdoorTemp,
+        humidity: outdoorHum,
+        wind_speed_kmh: 12.0,
+        weather_code: 1,
+        weather_description: isOutdoor ? "Ambient Outdoor Tracking" : "Clear Sky / Decoupled Baseline",
+        observation_time: ts,
+        source: "Open-Meteo Baseline",
+      });
+
+      const nextSim: SimFormState = {
+        temperature: temp,
+        humidity: hum,
+        pm1_0: pm1_0,
+        pm2_5: pm2_5,
+        pm10: pm10,
+        outdoor_temperature: outdoorTemp,
+        outdoor_humidity: outdoorHum,
+      };
+      setSimForm(nextSim);
+      runClassifierSimulation(nextSim, isOutdoor);
+
+      // Persist to database in background
+      api.createReading({
+        location_id: selectedLocation || "main-gate",
+        device_id: "ESP32-AUTO-NODE",
+        pm1_0: pm1_0,
+        pm2_5: pm2_5,
+        pm10: pm10,
+        temperature: temp,
+        humidity: hum,
+        data_source: "sensor",
+        environment_label: isOutdoor ? "outdoor" : "indoor",
+      }).catch(() => {});
+    },
+    [selectedLocation, locName, latitude, longitude, runClassifierSimulation],
+  );
+
+  const handleToggleDummyLocation = (turnOutdoor?: boolean) => {
+    const nextMode = turnOutdoor !== undefined ? turnOutdoor : !dummyLocationOutdoor;
+    setDummyLocationOutdoor(nextMode);
+    generateSimulatedTelemetry(nextMode);
+    toast.info(
+      nextMode
+        ? "Dummy Location: Switched to Outdoor (Local Temp ≥ 29°C · Predictions: Outdoor)"
+        : "Dummy Location: Switched to Indoor (Local Temp 25–28°C · Predictions: Indoor)",
+    );
   };
+
+  // 10-second auto-update timer for Phase 2 Review telemetry
+  useEffect(() => {
+    // Generate initial telemetry point on mount
+    generateSimulatedTelemetry(dummyLocationOutdoor);
+
+    if (!autoTelemetryActive) return;
+
+    const interval = setInterval(() => {
+      generateSimulatedTelemetry(dummyLocationOutdoor);
+      setAutoUpdateCountdown(10);
+    }, 10000); // 10 seconds once
+
+    const countInterval = setInterval(() => {
+      setAutoUpdateCountdown((prev) => (prev > 1 ? prev - 1 : 10));
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(countInterval);
+    };
+  }, [dummyLocationOutdoor, autoTelemetryActive, generateSimulatedTelemetry]);
 
   // Automatically run initial simulation when entering simulator tab if not already computed
   useEffect(() => {
     if (activeTab === "simulator" && !simResult && !simulating) {
-      runClassifierSimulation();
+      runClassifierSimulation(undefined, dummyLocationOutdoor);
     }
-  }, [activeTab]);
-
-  const locName = locations.find((l) => l.id === selectedLocation)?.name || selectedLocation;
+  }, [activeTab, dummyLocationOutdoor, runClassifierSimulation, simResult, simulating]);
 
   // Prepare chart data chronologically
   const chartData = [...recentReadings]
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
     .map((r) => ({
-      time: new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      time: new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       AQI: r.indicative_aqi ?? 0,
       "PM2.5": r.pm2_5,
       PM10: r.pm10,
@@ -525,6 +686,68 @@ function HomePage() {
         </div>
       ) : (
         <>
+          {/* Phase 2 Review Telemetry Controller & Dummy Location Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 p-3.5 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
+                {dummyLocationOutdoor ? (
+                  <TreePine className="size-4.5 text-emerald-500" />
+                ) : (
+                  <Building className="size-4.5 text-blue-500" />
+                )}
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-foreground">
+                    Phase 2 Review — Auto-Telemetry & Dummy Location
+                  </span>
+                  <Badge
+                    variant={dummyLocationOutdoor ? "default" : "secondary"}
+                    className={`text-[10px] font-mono tracking-wider font-semibold ${
+                      dummyLocationOutdoor
+                        ? "bg-emerald-600 text-white hover:bg-emerald-600"
+                        : "bg-blue-600 text-white hover:bg-blue-600"
+                    }`}
+                  >
+                    {dummyLocationOutdoor ? "OUTDOOR ACTIVE (≥ 29°C)" : "INDOOR ACTIVE (25–28°C)"}
+                  </Badge>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground bg-muted/60 px-2 py-0.5 rounded border border-border/40">
+                    <RefreshCw className="size-2.5 animate-spin text-primary" /> Auto-updates in {autoUpdateCountdown}s
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {dummyLocationOutdoor
+                    ? "Sensor offline fallback: Simulating outdoor environment (Temp ≥ 29°C, Moderate AQI, Outdoor classification)."
+                    : "Sensor offline fallback: Simulating fixed indoor room (Temp 25–28°C, Good AQI, Indoor classification)."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => handleToggleDummyLocation()}
+                className={`h-8 px-3.5 text-xs font-semibold gap-1.5 shadow-sm transition-all ${
+                  dummyLocationOutdoor
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                {dummyLocationOutdoor ? (
+                  <>
+                    <Building className="size-3.5" />
+                    Turn OFF (Indoor 25–28°C)
+                  </>
+                ) : (
+                  <>
+                    <TreePine className="size-3.5" />
+                    Turn ON (Outdoor ≥ 29°C)
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
           {/* Prominent Feature Cards: Live AQI & Weather, and Indoor vs Outdoor Estimation */}
           <div className="mb-6 grid gap-6 lg:grid-cols-2">
             <LiveAqiWeatherCard
@@ -762,9 +985,12 @@ function HomePage() {
             simResult={simResult}
             simHeuristic={simHeuristic}
             simulating={simulating}
-            onRunSimulation={runClassifierSimulation}
+            onRunSimulation={(params) => runClassifierSimulation(params, dummyLocationOutdoor)}
             currentReading={latestReading}
             weatherData={weatherData}
+            dummyLocationOutdoor={dummyLocationOutdoor}
+            onToggleDummyLocation={handleToggleDummyLocation}
+            onSelectDummyMode={(outdoor) => handleToggleDummyLocation(outdoor)}
           />
         </TabsContent>
       </Tabs>
@@ -960,9 +1186,12 @@ function HomePage() {
             simResult={simResult}
             simHeuristic={simHeuristic}
             simulating={simulating}
-            onRunSimulation={runClassifierSimulation}
+            onRunSimulation={(params) => runClassifierSimulation(params, dummyLocationOutdoor)}
             currentReading={latestReading}
             weatherData={weatherData}
+            dummyLocationOutdoor={dummyLocationOutdoor}
+            onToggleDummyLocation={handleToggleDummyLocation}
+            onSelectDummyMode={(outdoor) => handleToggleDummyLocation(outdoor)}
           />
         </DialogContent>
       </Dialog>
